@@ -1,0 +1,12 @@
+size_imbalance:
+  name: "Size imbalance"
+  condition: "{posix_layer}_size_sum > 0 & (abs({posix_layer}_write_size_sum - {posix_layer}_read_size_sum) / {posix_layer}_size_sum) > 0.1"
+  reasons:
+    - condition: "{posix_layer}_read_size_sum > {posix_layer}_write_size_sum"
+      message: |
+        "read" size is {{ "%.2f" | format(({posix_layer}_read_size_sum / {posix_layer}_size_sum) * 100) }}% 
+        ({{ {posix_layer}_read_size_sum | format_bytes }}) of total I/O size.
+    - condition: "{posix_layer}_write_size_sum > {posix_layer}_read_size_sum"
+      message: |
+        "write" size is {{ "%.2f" | format(({posix_layer}_write_size_sum / {posix_layer}_size_sum) * 100) }}% 
+        ({{ {posix_layer}_write_size_sum | format_bytes }}) of total I/O size.

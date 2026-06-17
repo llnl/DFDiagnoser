@@ -1,0 +1,12 @@
+small_reads:
+  name: "Small reads"
+  condition: "({posix_layer}_read_{time_metric} / {posix_layer}_{time_metric}) > 0.5 & ({posix_layer}_read_size_sum / {posix_layer}_count_sum) < 1048576"
+  reasons:
+    - condition: "({posix_layer}_read_{time_metric} / {posix_layer}_{time_metric}) > 0.5"
+      message: |
+        "read" time is {{ "%.2f" | format(({posix_layer}_read_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% 
+        ({{ "%.2f" | format({posix_layer}_read_{time_metric}) }} seconds) of I/O time.
+    - condition: "({posix_layer}_read_size_sum / {posix_layer}_count_sum) < 1048576"
+      message: |
+        Average "read"s are {{ ({posix_layer}_read_size_sum / {posix_layer}_count_sum) | format_bytes }}, 
+        which is smaller than {{ 1048576 | format_bytes }}.

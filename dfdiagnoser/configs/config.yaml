@@ -1,0 +1,17 @@
+defaults:
+  # - model: model_config # from ConfigStore
+  # - hydra/job: dfdiagnoser
+  # - hydra/help: dfdiagnoser
+  - diagnoser: default
+  - input: checkpoint
+  - output: file
+  - rule_defs/posix: all
+  - _self_
+  - override hydra/help: dfdiagnoser
+  - override hydra/job_logging: dfdiagnoser
+
+hydra:
+  job:
+    name: dfdiagnoser
+
+debug: false

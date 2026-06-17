@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include pyproject.toml
+recursive-include configs *.yaml
+recursive-include dfdiagnoser *.py
+recursive-include tests *.py

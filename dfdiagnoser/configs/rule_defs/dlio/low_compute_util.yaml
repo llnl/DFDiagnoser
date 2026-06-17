@@ -1,0 +1,6 @@
+low_compute_util:
+  name: "Low Compute Utilization"
+  condition: "compute_util < 0.7"
+  reasons:
+    - condition: "compute_util < 0.7"
+      message: Compute utilization is {{ "%.2f" | format(compute_util * 100) }}%.

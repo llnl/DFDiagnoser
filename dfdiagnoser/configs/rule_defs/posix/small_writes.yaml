@@ -1,0 +1,12 @@
+small_writes:
+  name: "Small writes"
+  condition: "({posix_layer}_write_{time_metric} / {posix_layer}_{time_metric}) > 0.5 & ({posix_layer}_write_size_sum / {posix_layer}_count_sum) < 1048576"
+  reasons:
+    - condition: "({posix_layer}_write_{time_metric} / {posix_layer}_{time_metric}) > 0.5"
+      message: |
+        "write" time is {{ "%.2f" | format(({posix_layer}_write_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% 
+        ({{ "%.2f" | format({posix_layer}_write_{time_metric}) }} seconds) of I/O time.
+    - condition: "({posix_layer}_write_size_sum / {posix_layer}_count_sum) < 1048576"
+      message: |
+        Average "write"s are {{ ({posix_layer}_write_size_sum / {posix_layer}_count_sum) | format_bytes }}, 
+        which is smaller than {{ 1048576 | format_bytes }}.

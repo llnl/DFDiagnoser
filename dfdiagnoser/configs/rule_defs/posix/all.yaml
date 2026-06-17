@@ -1,0 +1,7 @@
+defaults:
+  - excessive_metadata_access
+  - operation_imbalance
+  - size_imbalance
+  - small_reads
+  - small_writes
+  - _self_

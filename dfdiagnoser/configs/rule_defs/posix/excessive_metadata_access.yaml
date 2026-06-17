@@ -1,0 +1,19 @@
+excessive_metadata_access:
+  name: "Excessive metadata access"
+  condition: "({posix_layer}_metadata_{time_metric} / {posix_layer}_{time_metric}) >= 0.5"
+  reasons:
+    - condition: "({posix_layer}_open_{time_metric} > {posix_layer}_close_{time_metric}) & ({posix_layer}_open_{time_metric} > {posix_layer}_seek_{time_metric})"
+      message: |
+        Overall {{ "%.2f" | format(({posix_layer}_open_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% ({{ "%.2f" | format({posix_layer}_open_{time_metric}) }} 
+        seconds) of I/O time is spent on metadata access, specifically {{ "%.2f" | format(({posix_layer}_open_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% 
+        ({{ "%.2f" | format({posix_layer}_open_{time_metric}) }} seconds) on the "open" operation.
+    - condition: "({posix_layer}_close_{time_metric} > {posix_layer}_open_{time_metric}) & ({posix_layer}_close_{time_metric} > {posix_layer}_seek_{time_metric})"
+      message: |
+        Overall {{ "%.2f" | format(({posix_layer}_close_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% ({{ "%.2f" | format({posix_layer}_close_{time_metric}) }} 
+        seconds) of I/O time is spent on metadata access, specifically {{ "%.2f" | format(({posix_layer}_close_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% 
+        ({{ "%.2f" | format({posix_layer}_close_{time_metric}) }} seconds) on the "close" operation.
+    - condition: "({posix_layer}_seek_{time_metric} > {posix_layer}_open_{time_metric}) & ({posix_layer}_seek_{time_metric} > {posix_layer}_close_{time_metric})"
+      message: |
+        Overall {{ "%.2f" | format(({posix_layer}_seek_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% ({{ "%.2f" | format({posix_layer}_seek_{time_metric}) }} 
+        seconds) of I/O time is spent on metadata access, specifically {{ "%.2f" | format(({posix_layer}_seek_{time_metric} / {posix_layer}_{time_metric}) * 100) }}% 
+        ({{ "%.2f" | format({posix_layer}_seek_{time_metric}) }} seconds) on the "seek" operation.

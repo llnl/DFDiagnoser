@@ -1,0 +1,12 @@
+operation_imbalance:
+  name: "Operation imbalance"
+  condition: "(abs({posix_layer}_write_count_sum - {posix_layer}_read_count_sum) / {posix_layer}_count_sum) > 0.1"
+  reasons:
+    - condition: "{posix_layer}_read_count_sum > {posix_layer}_write_count_sum"
+      message: |
+        "read" operations are {{ "%.2f" | format(({posix_layer}_read_count_sum / {posix_layer}_count_sum) * 100) }}% 
+        ({{ {posix_layer}_read_count_sum | format_number }} operations) of total I/O operations.
+    - condition: "{posix_layer}_write_count_sum > {posix_layer}_read_count_sum"
+      message: |
+        "write" operations are {{ "%.2f" | format(({posix_layer}_write_count_sum / {posix_layer}_count_sum) * 100) }}% 
+        ({{ {posix_layer}_write_count_sum | format_number }} operations) of total I/O operations.

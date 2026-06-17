@@ -1,0 +1,3 @@
+defaults:
+  - low_compute_util
+  - _self_

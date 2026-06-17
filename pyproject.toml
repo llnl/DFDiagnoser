@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dfdiagnoser"
+version = "0.0.1"
+description = "Data Flow Diagnoser"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = [
+    "hydra-core~=1.3.0",
+    "inflect>=7.0.0",
+    "jinja2>=3.1.6",
+    "pandas>=2.0",
+    "pyarrow>=21.0.0",
+    "rich~=14.1.0",
+    "structlog>=25",
+]
+
+[project.optional-dependencies]
+streaming = ["pyzmq>=27.0.0", "streamz>=0.6.4", "streamz-zmq>=0.1.4"]
+
+[project.scripts]
+dfdiagnoser = "dfdiagnoser.__main__:main"
+
+[dependency-groups]
+dev = ["ipykernel>=6", "pytest>=8", "ruff>=0.12.0"]
+
+[tool.pytest.ini_options]
+markers = [
+    "smoke: minimal test subset for quick validation (select with '-m smoke')",
+    "full: comprehensive test suite with all parameter combinations (select with '-m full')",
+]
