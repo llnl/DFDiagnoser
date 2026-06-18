@@ -83,6 +83,79 @@ class Diagnoser:
             scored_flat_views=scored_flat_views,
         )
 
+    def diagnose_facts(self, facts_path: str, output_handler=None) -> DiagnosisResult:
+        """Offline replay: read saved analyzer fact envelopes and accumulate them
+        through the same longitudinal pipeline the Mofka stream uses, then build
+        and return findings. Requires no Mofka/streaming dependency.
+
+        ``facts_path`` may be a ``.jsonl`` file (one ``analyzer.fact-envelope.v1``
+        object per line) or a directory of per-window envelope ``.json`` files
+        (read in sorted order).
+        """
+        if not os.path.exists(facts_path):
+            raise FileNotFoundError(f"Facts path {facts_path} does not exist")
+
+        with console_block("Replay fact envelopes"):
+            window_count = 0
+            for envelope in self._read_fact_envelopes(facts_path):
+                self._ingest_fact_envelope(envelope)
+                # Advance the window after each envelope, exactly as the stream
+                # loop does after each analysis_facts event, so persistence and
+                # prevalence match the online path (online/offline parity).
+                self.state.advance_window()
+                window_count += 1
+
+        logger.info("diagnoser.facts.replayed", windows=window_count, path=facts_path)
+
+        findings = self._build_longitudinal_summary()
+        for finding in findings:
+            logger.info(
+                "diagnoser.finding",
+                finding_type=finding.finding_type,
+                scope=finding.scope,
+                layer=finding.layer,
+                motif=finding.motif,
+                severity=finding.severity,
+                confidence=round(finding.confidence, 4),
+                prevalence=round(finding.trend.prevalence, 4),
+                persistence=finding.trend.persistence,
+                trend_direction=finding.trend.trend_direction,
+                summary=finding.summary,
+            )
+
+        result = DiagnosisResult(
+            flat_view_paths=[],
+            scored_flat_views=[],
+            findings=findings,
+        )
+        if output_handler is not None:
+            output_handler(result)
+        return result
+
+    @staticmethod
+    def _read_fact_envelopes(facts_path: str):
+        """Yield fact-envelope dicts from a ``.jsonl`` file (one per line) or a
+        directory of per-window envelope ``.json`` files (sorted by name)."""
+        if os.path.isdir(facts_path):
+            paths = sorted(glob.glob(os.path.join(facts_path, "*.json")))
+            if not paths:
+                raise ValueError(f"No .json envelope files found in {facts_path}")
+            for p in paths:
+                with open(p, "r", encoding="utf-8") as f:
+                    yield json.load(f)
+        else:
+            with open(facts_path, "r", encoding="utf-8") as f:
+                for line_no, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"Invalid JSON on line {line_no} of {facts_path}: {exc}"
+                        ) from exc
+
     def diagnose_mofka(
         self,
         group_file: str,
@@ -319,8 +392,9 @@ class Diagnoser:
         )
 
     def _handle_analysis_facts(self, event, metadata):
-        from .state import FactObservation
-
+        """Mofka-path wrapper: decode the event payload into a fact envelope,
+        then delegate to the shared, transport-agnostic ingest core so the
+        streaming and offline paths accumulate state identically."""
         payload = event.data
         if payload is None:
             logger.warning("diagnoser.analysis_facts.no_data")
@@ -332,6 +406,20 @@ class Diagnoser:
             payload = b"".join(payload)
 
         envelope = json.loads(payload.decode("utf-8"))
+        return self._ingest_fact_envelope(envelope)
+
+    def _ingest_fact_envelope(self, envelope: dict):
+        """Accumulate one analyzer fact envelope into longitudinal state.
+
+        Transport-agnostic: shared verbatim by the Mofka stream path
+        (``_handle_analysis_facts``) and the offline replay path
+        (``diagnose_facts``). Because both feed the same envelope dicts produced
+        by ``AnalysisResult.to_fact_envelope()``, online and offline produce
+        byte-identical findings. Returns the set of (fact_type, scope) keys
+        touched in this window.
+        """
+        from .state import FactObservation
+
         facts = envelope.get("facts", [])
 
         logger.info(
@@ -721,28 +809,9 @@ class Diagnoser:
                 trend_direction=finding.trend.trend_direction,
                 publish_mode=publish_mode,
             )
-            payload_dict = {
-                "finding_type": finding.finding_type,
-                "scope": finding.scope,
-                "layer": finding.layer,
-                "motif": finding.motif,
-                "severity": finding.severity,
-                "severity_score": finding.severity_score,
-                "confidence": finding.confidence,
-                "prevalence": finding.trend.prevalence,
-                "persistence": finding.trend.persistence,
-                "support_windows": finding.trend.support_windows,
-                "trend_direction": finding.trend.trend_direction,
-                "last_seen_window": finding.trend.last_seen_window,
-                "contributing_facts": finding.contributing_facts,
-                "recommendation_bundle": finding.recommendation_bundle,
-                "opportunity_tags": finding.opportunity_tags,
-                "suppresses_tags": finding.suppresses_tags,
-                "summary": finding.summary,
-                "window_index": finding.trend.last_seen_window,
-                "publish_mode": publish_mode,
-                "key_metrics": finding.key_metrics,
-            }
+            # Shared serializer (parity with offline findings.json output).
+            payload_dict = finding.to_wire_dict()
+            payload_dict["publish_mode"] = publish_mode
             payload = json.dumps(payload_dict).encode("utf-8")
             metadata = {
                 "type": "diagnosis_finding",

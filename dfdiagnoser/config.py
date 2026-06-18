@@ -16,6 +16,12 @@ class CheckpointInputConfig(InputConfig):
 
 
 @dc.dataclass
+class FactsInputConfig(InputConfig):
+    _target_: str = "dfdiagnoser.input.FactsInput"
+    file_path: str = MISSING
+
+
+@dc.dataclass
 class MofkaInputConfig(InputConfig):
     _target_: str = "dfdiagnoser.input.MofkaInput"
     group_file: str = MISSING
@@ -61,12 +67,15 @@ class RuleDefinitionConfig:
 @dc.dataclass
 class DiagnoserConfig:
     _target_: str = "dfdiagnoser.diagnoser.Diagnoser"
+    trend_strategy: str = "fixed"
+    trend_lookback: int = 3
 
 
 def init_hydra_config_store() -> ConfigStore:
     cs = ConfigStore.instance()
     cs.store(group="diagnoser", name="default", node=DiagnoserConfig)
     cs.store(group="input", name="checkpoint", node=CheckpointInputConfig)
+    cs.store(group="input", name="facts", node=FactsInputConfig)
     cs.store(group="input", name="mofka", node=MofkaInputConfig)
     cs.store(group="output", name="console", node=ConsoleOutputConfig)
     cs.store(group="output", name="file", node=FileOutputConfig)

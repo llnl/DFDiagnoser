@@ -8,11 +8,11 @@ from typing import List, Union
 
 from .config import init_hydra_config_store
 from .diagnoser import Diagnoser
-from .input import CheckpointInput, MofkaInput
+from .input import CheckpointInput, FactsInput, MofkaInput
 from .output import ConsoleOutput, FileOutput
 from .utils.log_utils import configure_logging, log_block
 
-InputType = Union[CheckpointInput, MofkaInput]
+InputType = Union[CheckpointInput, FactsInput, MofkaInput]
 OutputType = Union[ConsoleOutput, FileOutput]
 
 
@@ -76,6 +76,13 @@ class DFDiagnoserInstance:
             output_topic=output_topic,
         )
 
+    def diagnose_facts(self, facts_path: str = None):
+        """Offline replay of saved analyzer fact envelopes using the configured
+        diagnoser. Returns the DiagnosisResult (caller applies output)."""
+        if facts_path is None:
+            facts_path = self.input.file_path
+        return self.diagnoser.diagnose_facts(facts_path)
+
     def handle_result(self, result):
         """Handle the diagnosis result using the configured output."""
         self.output.handle_result(result)
@@ -121,6 +128,7 @@ __all__ = [
     "InputType",
     "OutputType",
     "CheckpointInput",
+    "FactsInput",
     "MofkaInput",
     "ConsoleOutput",
     "FileOutput",
