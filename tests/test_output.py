@@ -6,11 +6,13 @@ from dfdiagnoser.output import ConsoleOutput, FileOutput
 from dfdiagnoser.types import DiagnosisFinding, DiagnosisResult, TrendEvidence
 
 
-def _finding(finding_type="fetch_pressure", scope="app:global", severity="critical"):
+def _finding(finding_type="fetch_pressure", scope="app:epoch", severity="critical",
+             view_type="epoch"):
     return DiagnosisFinding(
         finding_type=finding_type,
         scope=scope,
         layer=scope.split(":")[0] if ":" in scope else None,
+        view_type=view_type,
         motif="persistent_pressure",
         severity=severity,
         severity_score=0.92,
@@ -74,7 +76,23 @@ def test_console_output_renders_findings(capsys):
     assert "DFDiagnoser Diagnosis" in out
     assert "fetch_pressure" in out
     assert "persistent_pressure" in out
-    assert "app:global" in out
+    assert "app:epoch" in out
+    assert "view_type: epoch" in out  # grouped by view_type
+
+
+def test_console_output_groups_by_view_type(capsys):
+    findings = [
+        _finding("metadata_dominance", scope="reader_posix:/data/f0.npz",
+                 view_type="file_name"),
+        _finding("read_contention", scope="reader_posix:app#n1#0#1",
+                 view_type="proc_name"),
+        _finding("fetch_pressure", scope="app:epoch", view_type="epoch"),
+    ]
+    ConsoleOutput().handle_result(_result(findings))
+    out = capsys.readouterr().out
+    assert "view_type: file_name" in out
+    assert "view_type: proc_name" in out
+    assert "view_type: epoch" in out
 
 
 def test_console_output_empty(capsys):

@@ -440,18 +440,24 @@ class Diagnoser:
                 severity_score = float(severity) if severity else 0
                 severity_label = "unknown"
 
-            # scope is a nested dict: {"entity": str, "layer": str|null, ...}
-            # For per_row facts, entity is the row index (e.g., "0", "1") which
-            # changes every epoch — use view_type instead so the same fact_type
-            # accumulates into one tracker for longitudinal persistence tracking.
+            # The fact's window carries its view_type and epoch.
+            window = fact.get("window", {})
+            view_type = window.get("view_type") if isinstance(window, dict) else None
+            epoch = window.get("epoch") if isinstance(window, dict) else None
+
+            # scope is a nested dict: {"entity": str, "layer": str|null, ...}.
+            # Per-row (numeric) and whole-window entities have no stable identity
+            # across windows, so key them by the fact's own view_type
+            # (window.view_type) — this keeps e.g. epoch and time_range distinct
+            # and lets each accumulate longitudinally. Named entities (proc_name,
+            # file_name) key by the entity, giving per-process / per-file findings.
             scope = fact.get("scope", "global")
             if isinstance(scope, dict):
                 node = scope.get("node", "")
                 layer = scope.get("layer")
                 entity = str(scope.get("entity", "global"))
-                # Numeric entities are per-row indices; use view_type for tracking
-                if entity.isdigit():
-                    scope_key = envelope.get("view_type", "global")
+                if entity.isdigit() or entity == "window":
+                    scope_key = view_type or "global"
                 else:
                     scope_key = entity
                 if layer:
@@ -462,10 +468,6 @@ class Diagnoser:
             else:
                 scope_key = str(scope)
 
-            # window may have epoch info
-            window = fact.get("window", {})
-            epoch = window.get("epoch") if isinstance(window, dict) else None
-
             obs = FactObservation(
                 window_index=self.state.current_window,
                 epoch=epoch,
@@ -474,6 +476,7 @@ class Diagnoser:
                 evidence=fact.get("evidence", {}),
                 opportunity_tags=fact.get("opportunity_tags", []),
                 suppresses_tags=fact.get("suppresses_tags", []),
+                view_type=view_type,
             )
             key = (fact.get("fact_type", "unknown"), scope_key)
             self.state.record_fact(key, obs)
@@ -484,6 +487,7 @@ class Diagnoser:
                 window_index=self.state.current_window,
                 fact_type=fact.get("fact_type"),
                 scope=scope_key,
+                view_type=view_type,
                 severity_score=round(severity_score, 3),
                 severity_label=severity_label,
                 opportunity_tags=fact.get("opportunity_tags", []),
@@ -584,6 +588,9 @@ class Diagnoser:
             )
 
             layer, _ = self._split_scope(scope)
+            # view_type is consistent within a tracker since the scope key
+            # derives from it; take it from the peak obs.
+            view_type = peak_obs.view_type
             # Forward evidence metrics from the peak observation so the
             # optimizer can compute target values (e.g., Amdahl's Law).
             peak_metrics = self._observation_metrics(peak_obs)
@@ -617,6 +624,7 @@ class Diagnoser:
                 opportunity_tags=all_tags,
                 suppresses_tags=all_suppresses,
                 key_metrics=key_metrics,
+                view_type=view_type,
             )
             findings.append(finding)
 

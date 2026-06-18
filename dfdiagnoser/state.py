@@ -14,6 +14,7 @@ class FactObservation:
     evidence: Dict[str, Any] = dc.field(default_factory=dict)
     opportunity_tags: List[str] = dc.field(default_factory=list)
     suppresses_tags: List[str] = dc.field(default_factory=list)
+    view_type: Optional[str] = None  # the analyzer view_type (epoch/proc_name/file_name/...)
 
 
 class FactTracker:

@@ -77,7 +77,9 @@ def test_produces_persistent_pressure_finding(tmp_path):
     assert len(result.findings) == 1
     f = result.findings[0]
     assert f.finding_type == "fetch_pressure"
-    assert f.scope == "app:global"
+    # epoch-view facts (numeric entity) are keyed by their view_type
+    assert f.scope == "app:epoch"
+    assert f.view_type == "epoch"
     assert f.motif == "persistent_pressure"
     assert f.trend.prevalence == 1.0
     assert f.trend.persistence == 5

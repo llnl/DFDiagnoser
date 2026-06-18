@@ -33,6 +33,7 @@ class DiagnosisFinding:
     opportunity_tags: List[str] = dc.field(default_factory=list)
     suppresses_tags: List[str] = dc.field(default_factory=list)
     key_metrics: Dict[str, float] = dc.field(default_factory=dict)
+    view_type: Optional[str] = None  # analyzer view_type this finding came from
 
     def to_wire_dict(self) -> Dict[str, Any]:
         """Serialize to the dict shape published to Mofka for the optimizer.
@@ -45,6 +46,7 @@ class DiagnosisFinding:
             "finding_type": self.finding_type,
             "scope": self.scope,
             "layer": self.layer,
+            "view_type": self.view_type,
             "motif": self.motif,
             "severity": self.severity,
             "severity_score": self.severity_score,

@@ -87,30 +87,35 @@ class ConsoleOutput(Output):
 
     @staticmethod
     def _findings_tree(findings) -> Tree:
-        by_scope = defaultdict(list)
+        # Group by analyzer view_type, then by scope within it.
+        by_view_type = defaultdict(lambda: defaultdict(list))
         for f in findings:
-            by_scope[f.scope].append(f)
+            by_view_type[f.view_type or "unknown"][f.scope].append(f)
 
         tree = Tree("Findings")
-        for scope in sorted(by_scope):
-            scope_findings = by_scope[scope]
-            scope_node = tree.add(f"[bold]{scope}[/bold] ({len(scope_findings)})")
-            for f in scope_findings:
-                initial = _SEVERITY_INITIALS.get(f.severity, "?")
-                header = (
-                    f"[{initial}] {f.finding_type}: {f.motif} "
-                    f"(severity {f.severity} {f.severity_score:.2f}, "
-                    f"conf {f.confidence:.2f})"
-                )
-                detail = (
-                    f"prevalence {f.trend.prevalence:.2f}, "
-                    f"persistence {f.trend.persistence}, "
-                    f"trend {f.trend.trend_direction} -> {f.recommendation_bundle}"
-                )
-                finding_node = scope_node.add(header)
-                finding_node.add(f"[dim]{detail}[/dim]")
-                for cf_type, cf_scope in f.contributing_facts:
-                    finding_node.add(f"[dim](fact) {cf_type} @ {cf_scope}[/dim]")
+        for view_type in sorted(by_view_type):
+            by_scope = by_view_type[view_type]
+            total = sum(len(v) for v in by_scope.values())
+            view_node = tree.add(f"[bold cyan]view_type: {view_type}[/bold cyan] ({total})")
+            for scope in sorted(by_scope):
+                scope_findings = by_scope[scope]
+                scope_node = view_node.add(f"[bold]{scope}[/bold] ({len(scope_findings)})")
+                for f in scope_findings:
+                    initial = _SEVERITY_INITIALS.get(f.severity, "?")
+                    header = (
+                        f"[{initial}] {f.finding_type}: {f.motif} "
+                        f"(severity {f.severity} {f.severity_score:.2f}, "
+                        f"conf {f.confidence:.2f})"
+                    )
+                    detail = (
+                        f"prevalence {f.trend.prevalence:.2f}, "
+                        f"persistence {f.trend.persistence}, "
+                        f"trend {f.trend.trend_direction} -> {f.recommendation_bundle}"
+                    )
+                    finding_node = scope_node.add(header)
+                    finding_node.add(f"[dim]{detail}[/dim]")
+                    for cf_type, cf_scope in f.contributing_facts:
+                        finding_node.add(f"[dim](fact) {cf_type} @ {cf_scope}[/dim]")
         return tree
 
 
