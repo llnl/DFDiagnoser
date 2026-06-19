@@ -13,7 +13,7 @@ from dfdiagnoser.diagnoser import Diagnoser
 
 # ---- fixtures: synthetic analyzer.fact-envelope.v1 envelopes -----------------
 
-def _fact(fact_type, epoch, score=1.0, label="critical", layer="app", entity="0",
+def _fact(fact_type, epoch, score=1.0, label="critical", layer="app", entity=None,
           tags=None):
     return {
         "fact_type": fact_type,
@@ -151,3 +151,35 @@ def test_empty_dir_raises(tmp_path):
     empty.mkdir()
     with pytest.raises(ValueError):
         Diagnoser().diagnose_facts(str(empty))
+
+
+# ---- input=checkpoint reads facts.jsonl ; two-level scope --------------------
+
+def test_diagnose_checkpoint_reads_facts_jsonl(tmp_path):
+    # analyzer-style checkpoint dir containing a facts.jsonl artifact
+    (tmp_path / "facts.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in _persistent_pressure_envelopes(5)) + "\n"
+    )
+    result = Diagnoser().diagnose_checkpoint(str(tmp_path))
+    assert len(result.findings) == 1
+    f = result.findings[0]
+    assert f.finding_type == "fetch_pressure"
+    assert f.motif == "persistent_pressure"
+    assert f.scope == "app:epoch"  # aggregate scope
+
+
+def test_aggregate_fact_keyed_by_view(tmp_path):
+    env = _envelope([_fact("metadata_dominance", epoch=0, layer="reader_posix", entity=None)])
+    d = Diagnoser()
+    d._ingest_fact_envelope(env)
+    keys = {k for k, _ in d.state.all_trackers()}
+    assert ("metadata_dominance", "reader_posix:epoch") in keys
+
+
+def test_detail_fact_keyed_by_view_and_entity(tmp_path):
+    env = _envelope([_fact("metadata_dominance", epoch=0, layer="reader_posix",
+                           entity="/d/x.npz")])
+    d = Diagnoser()
+    d._ingest_fact_envelope(env)
+    keys = {k for k, _ in d.state.all_trackers()}
+    assert ("metadata_dominance", "reader_posix:epoch:/d/x.npz") in keys

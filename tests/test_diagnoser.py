@@ -41,7 +41,7 @@ def test_handle_analysis_facts_separates_layer_scoped_trackers():
         "facts": [
             {
                 "fact_type": "small_read_dominance",
-                "scope": {"layer": "reader_posix", "entity": "1", "rank_set": "all"},
+                "scope": {"layer": "reader_posix", "entity": None, "rank_set": "all"},
                 "window": {"view_type": "epoch", "epoch":1},
                 "severity": {"score": 0.7, "label": "high"},
                 "opportunity_tags": ["small_io_reduction"],
@@ -49,7 +49,7 @@ def test_handle_analysis_facts_separates_layer_scoped_trackers():
             },
             {
                 "fact_type": "small_read_dominance",
-                "scope": {"layer": "checkpoint_posix", "entity": "1", "rank_set": "all"},
+                "scope": {"layer": "checkpoint_posix", "entity": None, "rank_set": "all"},
                 "window": {"view_type": "epoch", "epoch":1},
                 "severity": {"score": 0.6, "label": "high"},
                 "opportunity_tags": ["small_io_reduction"],
@@ -77,7 +77,7 @@ def test_build_longitudinal_summary_classifies_reader_metadata_bound():
             [
                 {
                     "fact_type": "metadata_dominance",
-                    "scope": {"layer": "reader_posix", "entity": "1", "rank_set": "all"},
+                    "scope": {"layer": "reader_posix", "entity": None, "rank_set": "all"},
                     "window": {"view_type": "epoch", "epoch":diagnoser.state.current_window + 1},
                     "severity": {"score": 0.7, "label": "high"},
                     "opportunity_tags": ["metadata_reduction"],
@@ -114,7 +114,7 @@ def test_build_longitudinal_summary_classifies_checkpoint_fragmentation():
             [
                 {
                     "fact_type": "small_write_dominance",
-                    "scope": {"layer": "checkpoint_posix", "entity": "1", "rank_set": "all"},
+                    "scope": {"layer": "checkpoint_posix", "entity": None, "rank_set": "all"},
                     "window": {"view_type": "epoch", "epoch":diagnoser.state.current_window + 1},
                     "severity": {"score": 0.75, "label": "high"},
                     "opportunity_tags": ["small_io_reduction"],
@@ -148,7 +148,7 @@ def test_build_longitudinal_summary_classifies_read_dominant_steady_state():
             [
                 {
                     "fact_type": "operation_imbalance",
-                    "scope": {"layer": "reader_posix", "entity": "1", "rank_set": "all"},
+                    "scope": {"layer": "reader_posix", "entity": None, "rank_set": "all"},
                     "window": {"view_type": "epoch", "epoch":epoch},
                     "severity": {"score": 0.8, "label": "high"},
                     "opportunity_tags": ["read_write_rebalancing"],
@@ -162,7 +162,7 @@ def test_build_longitudinal_summary_classifies_read_dominant_steady_state():
                 },
                 {
                     "fact_type": "size_imbalance",
-                    "scope": {"layer": "reader_posix", "entity": "1", "rank_set": "all"},
+                    "scope": {"layer": "reader_posix", "entity": None, "rank_set": "all"},
                     "window": {"view_type": "epoch", "epoch":epoch},
                     "severity": {"score": 0.78, "label": "high"},
                     "opportunity_tags": ["read_write_rebalancing"],
@@ -197,7 +197,7 @@ def test_build_control_findings_uses_current_window_and_fresh_scope():
         "facts": [
             {
                 "fact_type": "metadata_dominance",
-                "scope": {"layer": "reader_posix", "entity": "1", "rank_set": "all"},
+                "scope": {"layer": "reader_posix", "entity": None, "rank_set": "all"},
                 "window": {"view_type": "epoch", "epoch":1},
                 "severity": {"score": 0.7, "label": "high"},
                 "opportunity_tags": ["metadata_reduction"],
@@ -232,7 +232,7 @@ def test_build_control_findings_uses_current_window_and_fresh_scope():
         "facts": [
             {
                 "fact_type": "small_write_dominance",
-                "scope": {"layer": "checkpoint_posix", "entity": "1", "rank_set": "all"},
+                "scope": {"layer": "checkpoint_posix", "entity": None, "rank_set": "all"},
                 "window": {"view_type": "epoch", "epoch":2},
                 "severity": {"score": 0.75, "label": "high"},
                 "opportunity_tags": ["small_io_reduction"],

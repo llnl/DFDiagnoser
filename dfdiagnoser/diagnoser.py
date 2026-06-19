@@ -42,6 +42,9 @@ class Diagnoser:
         )
 
     def diagnose_checkpoint(self, checkpoint_dir: str, metric_boundaries: dict = {}):
+        """Offline diagnosis from an analyzer checkpoint dir. Produces findings
+        from the analyzer's facts.jsonl checkpoint (if present) and, if the
+        analyzer also checkpointed per-entity views, the scored detail views."""
         if not os.path.exists(checkpoint_dir):
             raise FileNotFoundError(
                 f"Checkpoint directory {checkpoint_dir} does not exist"
@@ -50,51 +53,55 @@ class Diagnoser:
             raise NotADirectoryError(
                 f"Checkpoint directory {checkpoint_dir} is not a directory"
             )
-        if not os.listdir(checkpoint_dir):
-            raise ValueError(f"Checkpoint directory {checkpoint_dir} is empty")
 
-        with console_block("Load raw stats"):
-            raw_stats_paths = glob.glob(
-                os.path.join(checkpoint_dir, "_raw_stats_*.json")
-            )
-            if not raw_stats_paths:
-                raise ValueError(
-                    f"Checkpoint directory {checkpoint_dir} does not contain any raw stats files"
-                )
-            with open(raw_stats_paths[0], "r") as f:
-                raw_stats = json.load(f)
-        flat_view_paths = glob.glob(
-            os.path.join(checkpoint_dir, "_flat_view_*.parquet")
+        # Findings come from the analyzer's facts.jsonl checkpoint artifact.
+        findings = []
+        facts_path = os.path.join(checkpoint_dir, "facts.jsonl")
+        if os.path.exists(facts_path):
+            findings = self._replay_facts(facts_path)
+
+        # Scored detail views are optional (only if the analyzer checkpointed
+        # per-entity views). Support both the new and legacy names.
+        flat_view_paths = sorted(
+            glob.glob(os.path.join(checkpoint_dir, "detail_view_*.parquet"))
+            + glob.glob(os.path.join(checkpoint_dir, "_flat_view_*.parquet"))
         )
-        if not flat_view_paths:
-            raise ValueError(
-                f"Checkpoint directory {checkpoint_dir} does not contain any flat view files"
-            )
+        scored_flat_views = []
+        if flat_view_paths:
+            with console_block("Score detail views"):
+                for flat_view_path in flat_view_paths:
+                    flat_view = pd.read_parquet(flat_view_path)
+                    scored_flat_views.append(score_metrics(flat_view, metric_boundaries))
 
-        with console_block("Score flat views"):
-            scored_flat_views = []
-            for flat_view_path in flat_view_paths:
-                flat_view = pd.read_parquet(flat_view_path)
-                scored_flat_view = score_metrics(flat_view, metric_boundaries)
-                scored_flat_views.append(scored_flat_view)
+        if not findings and not scored_flat_views:
+            raise ValueError(
+                f"Checkpoint directory {checkpoint_dir} has neither facts.jsonl "
+                f"nor detail/flat-view files"
+            )
 
         return DiagnosisResult(
             flat_view_paths=flat_view_paths,
             scored_flat_views=scored_flat_views,
+            findings=findings,
         )
 
     def diagnose_facts(self, facts_path: str, output_handler=None) -> DiagnosisResult:
-        """Offline replay: read saved analyzer fact envelopes and accumulate them
-        through the same longitudinal pipeline the Mofka stream uses, then build
-        and return findings. Requires no Mofka/streaming dependency.
-
-        ``facts_path`` may be a ``.jsonl`` file (one ``analyzer.fact-envelope.v1``
-        object per line) or a directory of per-window envelope ``.json`` files
-        (read in sorted order).
-        """
+        """Offline replay of saved analyzer fact envelopes -> findings, with no
+        Mofka/streaming dependency. ``facts_path`` may be a ``.jsonl`` file (one
+        ``analyzer.fact-envelope.v1`` object per line) or a directory of
+        per-window envelope ``.json`` files."""
         if not os.path.exists(facts_path):
             raise FileNotFoundError(f"Facts path {facts_path} does not exist")
+        findings = self._replay_facts(facts_path)
+        result = DiagnosisResult(flat_view_paths=[], scored_flat_views=[], findings=findings)
+        if output_handler is not None:
+            output_handler(result)
+        return result
 
+    def _replay_facts(self, facts_path: str):
+        """Replay fact envelopes through the same longitudinal pipeline the Mofka
+        stream uses (ingest + advance_window per envelope), then build findings.
+        Shared by diagnose_facts and diagnose_checkpoint."""
         with console_block("Replay fact envelopes"):
             window_count = 0
             for envelope in self._read_fact_envelopes(facts_path):
@@ -104,7 +111,6 @@ class Diagnoser:
                 # prevalence match the online path (online/offline parity).
                 self.state.advance_window()
                 window_count += 1
-
         logger.info("diagnoser.facts.replayed", windows=window_count, path=facts_path)
 
         findings = self._build_longitudinal_summary()
@@ -113,24 +119,15 @@ class Diagnoser:
                 "diagnoser.finding",
                 finding_type=finding.finding_type,
                 scope=finding.scope,
-                layer=finding.layer,
+                view_type=finding.view_type,
                 motif=finding.motif,
                 severity=finding.severity,
-                confidence=round(finding.confidence, 4),
                 prevalence=round(finding.trend.prevalence, 4),
                 persistence=finding.trend.persistence,
                 trend_direction=finding.trend.trend_direction,
                 summary=finding.summary,
             )
-
-        result = DiagnosisResult(
-            flat_view_paths=[],
-            scored_flat_views=[],
-            findings=findings,
-        )
-        if output_handler is not None:
-            output_handler(result)
-        return result
+        return findings
 
     @staticmethod
     def _read_fact_envelopes(facts_path: str):
@@ -445,26 +442,28 @@ class Diagnoser:
             view_type = window.get("view_type") if isinstance(window, dict) else None
             epoch = window.get("epoch") if isinstance(window, dict) else None
 
-            # scope is a nested dict: {"entity": str, "layer": str|null, ...}.
-            # Per-row (numeric) and whole-window entities have no stable identity
-            # across windows, so key them by the fact's own view_type
-            # (window.view_type) — this keeps e.g. epoch and time_range distinct
-            # and lets each accumulate longitudinally. Named entities (proc_name,
-            # file_name) key by the entity, giving per-process / per-file findings.
+            # scope is a nested dict: {"entity": str|null, "layer": str|null, ...}.
+            # Two-level scope keyed off the fact's view_type:
+            #   aggregate fact (entity is None / "window") -> "layer:view_type"
+            #       (whole-view rollup, e.g. "reader_posix:file_name", "app:epoch")
+            #   detail fact (entity set)                  -> "layer:view_type:entity"
+            #       (per-entity, e.g. "reader_posix:file_name:/d/x.npz", "app:epoch:5")
             scope = fact.get("scope", "global")
             if isinstance(scope, dict):
                 node = scope.get("node", "")
                 layer = scope.get("layer")
-                entity = str(scope.get("entity", "global"))
-                if entity.isdigit() or entity == "window":
-                    scope_key = view_type or "global"
-                else:
-                    scope_key = entity
+                raw_entity = scope.get("entity")
+                base = view_type or "global"
                 if layer:
-                    scope_key = f"{layer}:{scope_key}"
+                    base = f"{layer}:{base}"
+                entity = "" if raw_entity is None else str(raw_entity)
+                if entity and entity != "window":
+                    scope_key = f"{base}:{entity}"
+                else:
+                    scope_key = base
                 # Per-node scope: prepend node for independent tracking
                 if node:
-                    scope_key = f"node:{node}:{scope_key}" if scope_key else f"node:{node}"
+                    scope_key = f"node:{node}:{scope_key}"
             else:
                 scope_key = str(scope)
 

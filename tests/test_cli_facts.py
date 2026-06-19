@@ -11,7 +11,7 @@ def _fact(fact_type, epoch):
         "fact_type": fact_type,
         "window": {"run_id": "r1", "view_type": "epoch", "epoch": epoch, "step": None,
                    "t0_ns": 0, "t1_ns": 1, "trigger": "epoch.block"},
-        "scope": {"workload": "unet3d", "layer": "app", "entity": "0",
+        "scope": {"workload": "unet3d", "layer": "app", "entity": None,
                   "rank_set": None, "node": ""},
         "evidence": {"metrics": {"fetch_frac": 0.8}},
         "severity": {"score": 1.0, "label": "critical", "method": "rule_weighted"},
@@ -80,3 +80,27 @@ def test_cli_facts_console_output(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert "fetch_pressure" in proc.stdout
+
+
+def test_cli_checkpoint_input_reads_facts(tmp_path):
+    # the new primary path: analyzer checkpoints facts.jsonl, diagnoser reads it
+    ckpt = tmp_path / "ckpt"
+    ckpt.mkdir()
+    _write_persistent_facts(ckpt / "facts.jsonl")
+    out_dir = tmp_path / "out"
+    run_dir = tmp_path / "run"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "dfdiagnoser",
+         "input=checkpoint", f"input.checkpoint_dir={ckpt}",
+         "output=file", f"output.output_dir={out_dir}",
+         f"hydra.run.dir={run_dir}"],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    lines = (out_dir / "findings.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["finding_type"] == "fetch_pressure"
+    assert rec["motif"] == "persistent_pressure"
