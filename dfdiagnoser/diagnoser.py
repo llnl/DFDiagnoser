@@ -1,15 +1,12 @@
 import glob
-import io
 import json
 import os
 import signal
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
 import structlog
 
-from .scoring import score_metrics
 from .trend import TrendStrategy, get_trend_strategy
 from .types import DiagnosisResult
 from .utils.log_utils import console_block
@@ -42,9 +39,9 @@ class Diagnoser:
         )
 
     def diagnose_checkpoint(self, checkpoint_dir: str, metric_boundaries: dict = {}):
-        """Offline diagnosis from an analyzer checkpoint dir. Produces findings
-        from the analyzer's facts.jsonl checkpoint (if present) and, if the
-        analyzer also checkpointed per-entity views, the scored detail views."""
+        """Offline diagnosis from an analyzer checkpoint dir: replay its
+        facts.jsonl checkpoint into findings. Scoring/fact-building now lives in
+        the analyzer, so the diagnoser is purely a fact consumer."""
         if not os.path.exists(checkpoint_dir):
             raise FileNotFoundError(
                 f"Checkpoint directory {checkpoint_dir} does not exist"
@@ -54,36 +51,12 @@ class Diagnoser:
                 f"Checkpoint directory {checkpoint_dir} is not a directory"
             )
 
-        # Findings come from the analyzer's facts.jsonl checkpoint artifact.
-        findings = []
         facts_path = os.path.join(checkpoint_dir, "facts.jsonl")
-        if os.path.exists(facts_path):
-            findings = self._replay_facts(facts_path)
-
-        # Scored detail views are optional (only if the analyzer checkpointed
-        # per-entity views). Support both the new and legacy names.
-        flat_view_paths = sorted(
-            glob.glob(os.path.join(checkpoint_dir, "detail_view_*.parquet"))
-            + glob.glob(os.path.join(checkpoint_dir, "_flat_view_*.parquet"))
-        )
-        scored_flat_views = []
-        if flat_view_paths:
-            with console_block("Score detail views"):
-                for flat_view_path in flat_view_paths:
-                    flat_view = pd.read_parquet(flat_view_path)
-                    scored_flat_views.append(score_metrics(flat_view, metric_boundaries))
-
-        if not findings and not scored_flat_views:
+        if not os.path.exists(facts_path):
             raise ValueError(
-                f"Checkpoint directory {checkpoint_dir} has neither facts.jsonl "
-                f"nor detail/flat-view files"
+                f"Checkpoint directory {checkpoint_dir} does not contain facts.jsonl"
             )
-
-        return DiagnosisResult(
-            flat_view_paths=flat_view_paths,
-            scored_flat_views=scored_flat_views,
-            findings=findings,
-        )
+        return DiagnosisResult(findings=self._replay_facts(facts_path))
 
     def diagnose_facts(self, facts_path: str, output_handler=None) -> DiagnosisResult:
         """Offline replay of saved analyzer fact envelopes -> findings, with no
@@ -92,8 +65,7 @@ class Diagnoser:
         per-window envelope ``.json`` files."""
         if not os.path.exists(facts_path):
             raise FileNotFoundError(f"Facts path {facts_path} does not exist")
-        findings = self._replay_facts(facts_path)
-        result = DiagnosisResult(flat_view_paths=[], scored_flat_views=[], findings=findings)
+        result = DiagnosisResult(findings=self._replay_facts(facts_path))
         if output_handler is not None:
             output_handler(result)
         return result
@@ -293,9 +265,9 @@ class Diagnoser:
                                     window=self.state.current_window,
                                 )
                     else:
-                        self._handle_flat_view(
-                            event, metadata, metric_boundaries, output_handler
-                        )
+                        # Non-facts artifacts (e.g. flat views) are ignored: the
+                        # diagnoser is a pure fact consumer now (scoring/fact-building
+                        # moved to the analyzer).
                         flat_view_count += 1
                 except Exception:
                     error_count += 1
@@ -358,35 +330,6 @@ class Diagnoser:
 
             del consumer
             del driver
-
-    def _handle_flat_view(self, event, metadata, metric_boundaries, output_handler):
-        payload = event.data
-        if payload is None:
-            logger.warning("diagnoser.flat_view.no_data")
-            return
-        if isinstance(payload, list):
-            if not payload:
-                logger.warning("diagnoser.flat_view.empty_payload")
-                return
-            payload = b"".join(payload)
-
-        flat_view = pd.read_parquet(io.BytesIO(payload))
-        scored_flat_view = score_metrics(flat_view, metric_boundaries)
-
-        # Record score summaries into state
-        self.state.record_scored_summary(scored_flat_view)
-
-        result = DiagnosisResult(
-            flat_view_paths=[],
-            scored_flat_views=[scored_flat_view],
-        )
-        output_handler(result)
-
-        logger.info(
-            "diagnoser.flat_view.scored",
-            rows=len(flat_view),
-            view_type=metadata.get("view_type", "unknown"),
-        )
 
     def _handle_analysis_facts(self, event, metadata):
         """Mofka-path wrapper: decode the event payload into a fact envelope,

@@ -68,6 +68,7 @@ class DiagnosisFinding:
 
 @dc.dataclass
 class DiagnosisResult:
-    flat_view_paths: List[str]
-    scored_flat_views: List[pd.DataFrame]
     findings: List[DiagnosisFinding] = dc.field(default_factory=list)
+    # Deprecated: scoring moved to the analyzer; kept (empty) for output compat.
+    flat_view_paths: List[str] = dc.field(default_factory=list)
+    scored_flat_views: List[pd.DataFrame] = dc.field(default_factory=list)
