@@ -38,24 +38,18 @@ class Diagnoser:
             trend_strategy, lookback=trend_lookback, **trend_kwargs,
         )
 
-    def diagnose_checkpoint(self, checkpoint_dir: str, metric_boundaries: dict = {}):
-        """Offline diagnosis from an analyzer checkpoint dir: replay its
-        facts.jsonl checkpoint into findings. Scoring/fact-building now lives in
-        the analyzer, so the diagnoser is purely a fact consumer."""
-        if not os.path.exists(checkpoint_dir):
-            raise FileNotFoundError(
-                f"Checkpoint directory {checkpoint_dir} does not exist"
-            )
-        if not os.path.isdir(checkpoint_dir):
-            raise NotADirectoryError(
-                f"Checkpoint directory {checkpoint_dir} is not a directory"
-            )
+    def diagnose_file(self, path: str, metric_boundaries: dict = {}):
+        """Offline diagnosis from an analyzer output=file bundle dir: replay its
+        facts.jsonl into findings. Scoring/fact-building lives in the analyzer,
+        so the diagnoser is purely a fact consumer."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Bundle directory {path} does not exist")
+        if not os.path.isdir(path):
+            raise NotADirectoryError(f"Bundle path {path} is not a directory")
 
-        facts_path = os.path.join(checkpoint_dir, "facts.jsonl")
+        facts_path = os.path.join(path, "facts.jsonl")
         if not os.path.exists(facts_path):
-            raise ValueError(
-                f"Checkpoint directory {checkpoint_dir} does not contain facts.jsonl"
-            )
+            raise ValueError(f"Bundle directory {path} does not contain facts.jsonl")
         return DiagnosisResult(findings=self._replay_facts(facts_path))
 
     def diagnose_facts(self, facts_path: str, output_handler=None) -> DiagnosisResult:
@@ -73,7 +67,7 @@ class Diagnoser:
     def _replay_facts(self, facts_path: str):
         """Replay fact envelopes through the same longitudinal pipeline the Mofka
         stream uses (ingest + advance_window per envelope), then build findings.
-        Shared by diagnose_facts and diagnose_checkpoint."""
+        Shared by diagnose_facts and diagnose_file."""
         with console_block("Replay fact envelopes"):
             window_count = 0
             for envelope in self._read_fact_envelopes(facts_path):

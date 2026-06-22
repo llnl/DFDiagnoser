@@ -34,11 +34,11 @@ def _facts_jsonl(n_epochs: int = 5) -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_e2e_checkpoint_facts_to_findings(tmp_path: pathlib.Path) -> None:
-    """input=checkpoint reads the analyzer's facts.jsonl -> findings -> file output.
+def test_e2e_file_bundle_to_findings(tmp_path: pathlib.Path) -> None:
+    """input=file reads the analyzer's output=file bundle (facts.jsonl) -> findings.
 
     The diagnoser is a pure fact consumer now (scoring moved to the analyzer), so
-    the offline checkpoint path is facts.jsonl -> longitudinal findings.
+    the offline path is the bundle's facts.jsonl -> longitudinal findings.
     """
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
@@ -46,14 +46,15 @@ def test_e2e_checkpoint_facts_to_findings(tmp_path: pathlib.Path) -> None:
     output_dir = f"{tmp_path}/output"
 
     dfd = init_with_hydra(hydra_overrides=[
-        f"input.checkpoint_dir={ckpt}",
+        "input=file",
+        f"input.path={ckpt}",
         "output=file",
         f"output.output_dir={output_dir}",
     ])
-    assert dfd.hydra_config.input.checkpoint_dir == str(ckpt)
+    assert dfd.hydra_config.input.path == str(ckpt)
     assert dfd.hydra_config.output._target_ == "dfdiagnoser.output.FileOutput"
 
-    result = dfd.diagnose_checkpoint()
+    result = dfd.diagnose_file()
 
     assert len(result.findings) == 1, "expected one longitudinal finding"
     finding = result.findings[0]

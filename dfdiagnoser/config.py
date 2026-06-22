@@ -10,9 +10,9 @@ class InputConfig:
 
 
 @dc.dataclass
-class CheckpointInputConfig(InputConfig):
-    _target_: str = "dfdiagnoser.input.CheckpointInput"
-    checkpoint_dir: str = MISSING
+class FileInputConfig(InputConfig):
+    _target_: str = "dfdiagnoser.input.FileInput"
+    path: str = MISSING
 
 
 @dc.dataclass
@@ -74,7 +74,7 @@ class DiagnoserConfig:
 def init_hydra_config_store() -> ConfigStore:
     cs = ConfigStore.instance()
     cs.store(group="diagnoser", name="default", node=DiagnoserConfig)
-    cs.store(group="input", name="checkpoint", node=CheckpointInputConfig)
+    cs.store(group="input", name="file", node=FileInputConfig)
     cs.store(group="input", name="facts", node=FactsInputConfig)
     cs.store(group="input", name="mofka", node=MofkaInputConfig)
     cs.store(group="output", name="console", node=ConsoleOutputConfig)

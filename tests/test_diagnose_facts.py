@@ -153,14 +153,14 @@ def test_empty_dir_raises(tmp_path):
         Diagnoser().diagnose_facts(str(empty))
 
 
-# ---- input=checkpoint reads facts.jsonl ; two-level scope --------------------
+# ---- input=file reads the bundle's facts.jsonl ; two-level scope -------------
 
-def test_diagnose_checkpoint_reads_facts_jsonl(tmp_path):
-    # analyzer-style checkpoint dir containing a facts.jsonl artifact
+def test_diagnose_file_reads_bundle_facts_jsonl(tmp_path):
+    # analyzer output=file bundle dir containing a facts.jsonl artifact
     (tmp_path / "facts.jsonl").write_text(
         "\n".join(json.dumps(e) for e in _persistent_pressure_envelopes(5)) + "\n"
     )
-    result = Diagnoser().diagnose_checkpoint(str(tmp_path))
+    result = Diagnoser().diagnose_file(str(tmp_path))
     assert len(result.findings) == 1
     f = result.findings[0]
     assert f.finding_type == "fetch_pressure"

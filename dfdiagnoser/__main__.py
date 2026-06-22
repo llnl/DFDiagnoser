@@ -10,7 +10,7 @@ from pathlib import Path
 from . import InputType, OutputType
 from .config import init_hydra_config_store
 from .diagnoser import Diagnoser
-from .input import CheckpointInput, FactsInput, MofkaInput
+from .input import FileInput, FactsInput, MofkaInput
 from .utils.log_utils import configure_logging, console_block, log_block
 
 
@@ -34,10 +34,10 @@ def main(cfg: DictConfig):
         input: InputType = instantiate(cfg.input)
         output: OutputType = instantiate(cfg.output)
 
-    if isinstance(input, CheckpointInput):
-        # Resolve checkpoint_dir to absolute path to handle working directory changes
-        checkpoint_dir = Path(input.checkpoint_dir).resolve()
-        diagnosis_result = diagnoser.diagnose_checkpoint(str(checkpoint_dir))
+    if isinstance(input, FileInput):
+        # Resolve the bundle dir to an absolute path (working-dir independent)
+        bundle_dir = Path(input.path).resolve()
+        diagnosis_result = diagnoser.diagnose_file(str(bundle_dir))
         with console_block("Output"):
             output.handle_result(diagnosis_result)
     elif isinstance(input, FactsInput):

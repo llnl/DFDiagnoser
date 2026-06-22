@@ -2,17 +2,22 @@ import dataclasses as dc
 
 
 @dc.dataclass
-class CheckpointInput:
-    checkpoint_dir: str
+class FileInput:
+    """Offline diagnosis from DFAnalyzer's output=file bundle.
+
+    ``path`` is the bundle directory (mirror of the analyzer's ``output.output_dir``);
+    the diagnoser reads ``<path>/facts.jsonl`` from it.
+    """
+    path: str
 
 
 @dc.dataclass
 class FactsInput:
     """Offline replay of saved analyzer fact envelopes.
 
-    ``file_path`` mirrors DFAnalyzer's ``output=facts`` ``file_path``: a ``.jsonl``
-    file (one analyzer.fact-envelope.v1 object per line). It may also be a
-    directory of per-window envelope ``.json`` files.
+    ``file_path`` is a ``.jsonl`` file (one analyzer.fact-envelope.v1 object per
+    line) written by DFAnalyzer's ``output=file``. It may also be a directory of
+    per-window envelope ``.json`` files.
     """
     file_path: str
 

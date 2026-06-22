@@ -82,17 +82,17 @@ def test_cli_facts_console_output(tmp_path):
     assert "fetch_pressure" in proc.stdout
 
 
-def test_cli_checkpoint_input_reads_facts(tmp_path):
-    # the new primary path: analyzer checkpoints facts.jsonl, diagnoser reads it
-    ckpt = tmp_path / "ckpt"
-    ckpt.mkdir()
-    _write_persistent_facts(ckpt / "facts.jsonl")
+def test_cli_file_input_reads_bundle(tmp_path):
+    # the primary offline path: analyzer output=file writes the bundle, diagnoser reads it
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    _write_persistent_facts(bundle / "facts.jsonl")
     out_dir = tmp_path / "out"
     run_dir = tmp_path / "run"
 
     proc = subprocess.run(
         [sys.executable, "-m", "dfdiagnoser",
-         "input=checkpoint", f"input.checkpoint_dir={ckpt}",
+         "input=file", f"input.path={bundle}",
          "output=file", f"output.output_dir={out_dir}",
          f"hydra.run.dir={run_dir}"],
         capture_output=True, text=True,

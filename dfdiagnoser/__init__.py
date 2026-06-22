@@ -8,11 +8,11 @@ from typing import List, Union
 
 from .config import init_hydra_config_store
 from .diagnoser import Diagnoser
-from .input import CheckpointInput, FactsInput, MofkaInput
+from .input import FileInput, FactsInput, MofkaInput
 from .output import ConsoleOutput, FileOutput
 from .utils.log_utils import configure_logging, log_block
 
-InputType = Union[CheckpointInput, FactsInput, MofkaInput]
+InputType = Union[FileInput, FactsInput, MofkaInput]
 OutputType = Union[ConsoleOutput, FileOutput]
 
 
@@ -23,18 +23,18 @@ class DFDiagnoserInstance:
     input: InputType
     output: OutputType
 
-    def diagnose_checkpoint(self, checkpoint_dir: str = None):
-        """Diagnose the checkpoint using the configured diagnoser."""
-        if checkpoint_dir is None:
-            checkpoint_dir = self.input.checkpoint_dir
+    def diagnose_file(self, path: str = None):
+        """Diagnose an analyzer output=file bundle dir using the configured diagnoser."""
+        if path is None:
+            path = self.input.path
         # Use OmegaConf.to_object if metric_boundaries exists, otherwise use empty dict
         if 'metric_boundaries' in self.hydra_config:
             metric_boundaries = OmegaConf.to_object(self.hydra_config.metric_boundaries)
         else:
             metric_boundaries = {}
-        return self.diagnoser.diagnose_checkpoint(
-            checkpoint_dir=checkpoint_dir,
-            metric_boundaries=metric_boundaries
+        return self.diagnoser.diagnose_file(
+            path=path,
+            metric_boundaries=metric_boundaries,
         )
 
     def diagnose_mofka(
@@ -127,7 +127,7 @@ def init_with_hydra(hydra_overrides: List[str]):
 __all__ = [
     "InputType",
     "OutputType",
-    "CheckpointInput",
+    "FileInput",
     "FactsInput",
     "MofkaInput",
     "ConsoleOutput",
