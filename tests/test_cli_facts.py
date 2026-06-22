@@ -1,5 +1,5 @@
-"""End-to-end CLI test for the offline facts-replay path:
-`python -m dfdiagnoser input=facts ...` -> findings."""
+"""End-to-end CLI test for the offline path:
+`python -m dfdiagnoser input=file input.path=<analyzer output=file dir>` -> findings."""
 import json
 import os
 import subprocess
@@ -41,15 +41,17 @@ def _write_persistent_facts(path, n=5):
             f.write(json.dumps(_envelope([_fact("fetch_pressure", i)])) + "\n")
 
 
-def test_cli_facts_input_writes_findings(tmp_path):
-    facts = tmp_path / "facts.jsonl"
-    _write_persistent_facts(facts)
+def test_cli_file_input_writes_findings(tmp_path):
+    # the offline path: analyzer output=file writes the bundle, diagnoser reads its folder
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    _write_persistent_facts(bundle / "facts.jsonl")
     out_dir = tmp_path / "out"
     run_dir = tmp_path / "run"
 
     proc = subprocess.run(
         [sys.executable, "-m", "dfdiagnoser",
-         "input=facts", f"input.file_path={facts}",
+         "input=file", f"input.path={bundle}",
          "output=file", f"output.output_dir={out_dir}",
          f"hydra.run.dir={run_dir}"],
         capture_output=True, text=True,
@@ -66,41 +68,18 @@ def test_cli_facts_input_writes_findings(tmp_path):
     assert rec["publish_mode"] == "summary"
 
 
-def test_cli_facts_console_output(tmp_path):
-    facts = tmp_path / "facts.jsonl"
-    _write_persistent_facts(facts)
+def test_cli_file_input_console_output(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    _write_persistent_facts(bundle / "facts.jsonl")
     run_dir = tmp_path / "run"
 
     proc = subprocess.run(
         [sys.executable, "-m", "dfdiagnoser",
-         "input=facts", f"input.file_path={facts}",
+         "input=file", f"input.path={bundle}",
          "output=console", f"hydra.run.dir={run_dir}"],
         capture_output=True, text=True,
         env={**os.environ, "COLUMNS": "200"},
     )
     assert proc.returncode == 0, proc.stderr
     assert "fetch_pressure" in proc.stdout
-
-
-def test_cli_file_input_reads_bundle(tmp_path):
-    # the primary offline path: analyzer output=file writes the bundle, diagnoser reads it
-    bundle = tmp_path / "bundle"
-    bundle.mkdir()
-    _write_persistent_facts(bundle / "facts.jsonl")
-    out_dir = tmp_path / "out"
-    run_dir = tmp_path / "run"
-
-    proc = subprocess.run(
-        [sys.executable, "-m", "dfdiagnoser",
-         "input=file", f"input.path={bundle}",
-         "output=file", f"output.output_dir={out_dir}",
-         f"hydra.run.dir={run_dir}"],
-        capture_output=True, text=True,
-    )
-    assert proc.returncode == 0, proc.stderr
-
-    lines = (out_dir / "findings.jsonl").read_text().splitlines()
-    assert len(lines) == 1
-    rec = json.loads(lines[0])
-    assert rec["finding_type"] == "fetch_pressure"
-    assert rec["motif"] == "persistent_pressure"

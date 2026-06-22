@@ -10,7 +10,7 @@ from pathlib import Path
 from . import InputType, OutputType
 from .config import init_hydra_config_store
 from .diagnoser import Diagnoser
-from .input import FileInput, FactsInput, MofkaInput
+from .input import FileInput, MofkaInput
 from .utils.log_utils import configure_logging, console_block, log_block
 
 
@@ -38,12 +38,6 @@ def main(cfg: DictConfig):
         # Resolve the bundle dir to an absolute path (working-dir independent)
         bundle_dir = Path(input.path).resolve()
         diagnosis_result = diagnoser.diagnose_file(str(bundle_dir))
-        with console_block("Output"):
-            output.handle_result(diagnosis_result)
-    elif isinstance(input, FactsInput):
-        # Offline replay of saved analysis_facts -> findings.
-        facts_path = str(Path(input.file_path).resolve())
-        diagnosis_result = diagnoser.diagnose_facts(facts_path)
         with console_block("Output"):
             output.handle_result(diagnosis_result)
     elif isinstance(input, MofkaInput):

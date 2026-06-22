@@ -12,17 +12,6 @@ class FileInput:
 
 
 @dc.dataclass
-class FactsInput:
-    """Offline replay of saved analyzer fact envelopes.
-
-    ``file_path`` is a ``.jsonl`` file (one analyzer.fact-envelope.v1 object per
-    line) written by DFAnalyzer's ``output=file``. It may also be a directory of
-    per-window envelope ``.json`` files.
-    """
-    file_path: str
-
-
-@dc.dataclass
 class MofkaInput:
     group_file: str
     topic_name: str
