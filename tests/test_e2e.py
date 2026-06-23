@@ -24,7 +24,7 @@ def _facts_jsonl(n_epochs: int = 5) -> str:
                 "scope": {"workload": "unet3d", "layer": "app", "entity": None,
                           "rank_set": "all", "node": None},
                 "evidence": {"metrics": {"fetch_frac": 0.82}},
-                "severity": {"score": 0.9, "label": "critical", "method": "rule_weighted"},
+                "severity": {"score": 0.9, "label": "critical", "method": "rule_expr"},
                 "confidence": 0.85, "opportunity_tags": ["dataloader_prefetch"],
                 "suppresses_tags": [], "provenance": None,
                 "schema_version": "analysisfact.v1", "fact_id": f"af_{epoch}",

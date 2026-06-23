@@ -14,7 +14,7 @@ def _fact(fact_type, epoch):
         "scope": {"workload": "unet3d", "layer": "app", "entity": None,
                   "rank_set": None, "node": ""},
         "evidence": {"metrics": {"fetch_frac": 0.8}},
-        "severity": {"score": 1.0, "label": "critical", "method": "rule_weighted"},
+        "severity": {"score": 1.0, "label": "critical", "method": "rule_expr"},
         "confidence": 0.87,
         "opportunity_tags": ["dataloader_prefetch"],
         "suppresses_tags": [],

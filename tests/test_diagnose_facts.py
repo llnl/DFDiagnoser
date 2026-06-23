@@ -26,7 +26,7 @@ def _fact(fact_type, epoch, score=1.0, label="critical", layer="app", entity=Non
             "rank_set": None, "node": "",
         },
         "evidence": {"metrics": {"fetch_frac": 0.8, "compute_frac": 0.2}},
-        "severity": {"score": score, "label": label, "method": "rule_weighted"},
+        "severity": {"score": score, "label": label, "method": "rule_expr"},
         "confidence": 0.87,
         "opportunity_tags": tags or ["dataloader_prefetch", "reader_parallelism"],
         "suppresses_tags": [],
