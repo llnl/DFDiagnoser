@@ -176,6 +176,38 @@ def test_aggregate_fact_keyed_by_view(tmp_path):
     assert ("metadata_dominance", "reader_posix:epoch") in keys
 
 
+def _win_fact(fact_type, window, layer="reader_posix", score=1.0):
+    """A window-view fact: temporal, entity-free, with the analysis window stamped."""
+    return {
+        "fact_type": fact_type,
+        "window": {"run_id": "r1", "view_type": "window", "window": window,
+                   "epoch": None, "step": None, "t0_ns": 0, "t1_ns": 1, "trigger": "metric_eval"},
+        "scope": {"workload": "unet3d", "layer": layer, "entity": None,
+                  "rank_set": "all", "node": None},
+        "evidence": {"metrics": {}},
+        "severity": {"score": score, "label": "critical", "method": "metric_slope"},
+        "confidence": 0.85, "opportunity_tags": [], "suppresses_tags": [],
+        "provenance": None, "schema_version": "analysisfact.v1",
+        "fact_id": f"af_{fact_type}_{window}",
+    }
+
+
+def test_window_view_single_envelope_is_longitudinal(tmp_path):
+    # The offline single-pass case: ONE envelope holding per-window facts. The
+    # diagnoser bins by window.window, so it still accumulates persistence across
+    # windows (no per-envelope batching required).
+    env = _envelope([_win_fact("read_slope", window=i) for i in range(5)])
+    path = _write_jsonl([env], tmp_path / "facts.jsonl")
+    findings = Diagnoser().diagnose_facts(path).findings
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.finding_type == "read_slope"
+    assert f.scope == "reader_posix:window"   # entity-free temporal scope
+    assert f.view_type == "window"
+    assert f.trend.persistence == 5           # 5 distinct windows from ONE envelope
+
+
 def test_detail_fact_keyed_by_view_and_entity(tmp_path):
     env = _envelope([_fact("metadata_dominance", epoch=0, layer="reader_posix",
                            entity="/d/x.npz")])

@@ -13,6 +13,10 @@ from .utils.log_utils import console_block
 
 logger = structlog.get_logger()
 
+# Views whose facts are longitudinal: keyed on the analysis window (FactWindow.window).
+# Everything else is spatial/one-shot. See dfanalyzer docs/window-as-longitudinal-axis.md.
+TEMPORAL_VIEW_TYPES = {"window"}
+
 _shutdown_requested = False
 
 
@@ -374,9 +378,11 @@ class Diagnoser:
                 severity_score = float(severity) if severity else 0
                 severity_label = "unknown"
 
-            # The fact's window carries its view_type and epoch.
+            # The fact's window carries its view_type, the analysis window (the
+            # longitudinal coordinate for temporal views), and epoch/step metadata.
             window = fact.get("window", {})
             view_type = window.get("view_type") if isinstance(window, dict) else None
+            window_num = window.get("window") if isinstance(window, dict) else None
             epoch = window.get("epoch") if isinstance(window, dict) else None
 
             # scope is a nested dict: {"entity": str|null, "layer": str|null, ...}.
@@ -405,7 +411,15 @@ class Diagnoser:
                 scope_key = str(scope)
 
             obs = FactObservation(
-                window_index=self.state.current_window,
+                # Temporal (window) facts are keyed on the analysis window they
+                # carry, so a single offline envelope spanning many windows still
+                # accumulates persistence (online: equals the per-envelope counter).
+                # Spatial facts fall back to the current window (one-shot offline).
+                window_index=(
+                    window_num
+                    if (view_type in TEMPORAL_VIEW_TYPES and window_num is not None)
+                    else self.state.current_window
+                ),
                 epoch=epoch,
                 severity_score=severity_score,
                 severity_label=severity_label,
