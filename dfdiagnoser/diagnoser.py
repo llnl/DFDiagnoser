@@ -382,7 +382,7 @@ class Diagnoser:
             # longitudinal coordinate for temporal views), and epoch/step metadata.
             window = fact.get("window", {})
             view_type = window.get("view_type") if isinstance(window, dict) else None
-            window_num = window.get("window") if isinstance(window, dict) else None
+            fact_window_index = window.get("window_index") if isinstance(window, dict) else None
             epoch = window.get("epoch") if isinstance(window, dict) else None
 
             # scope is a nested dict: {"entity": str|null, "layer": str|null, ...}.
@@ -416,8 +416,8 @@ class Diagnoser:
                 # accumulates persistence (online: equals the per-envelope counter).
                 # Spatial facts fall back to the current window (one-shot offline).
                 window_index=(
-                    window_num
-                    if (view_type in TEMPORAL_VIEW_TYPES and window_num is not None)
+                    fact_window_index
+                    if (view_type in TEMPORAL_VIEW_TYPES and fact_window_index is not None)
                     else self.state.current_window
                 ),
                 epoch=epoch,

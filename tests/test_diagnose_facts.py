@@ -180,7 +180,7 @@ def _win_fact(fact_type, window, layer="reader_posix", score=1.0):
     """A window-view fact: temporal, entity-free, with the analysis window stamped."""
     return {
         "fact_type": fact_type,
-        "window": {"run_id": "r1", "view_type": "window", "window": window,
+        "window": {"run_id": "r1", "view_type": "window", "window_index": window,
                    "epoch": None, "step": None, "t0_ns": 0, "t1_ns": 1, "trigger": "metric_eval"},
         "scope": {"workload": "unet3d", "layer": layer, "entity": None,
                   "rank_set": "all", "node": None},
