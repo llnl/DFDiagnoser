@@ -115,7 +115,8 @@ def test_online_offline_parity(tmp_path):
         online._handle_analysis_facts(
             _FakeEvent(env), {"artifact_type": "analysis_facts"}
         )
-        online.state.advance_window()
+        # No explicit advance: current_window is aligned to each fact's window
+        # coordinate on ingest, identically to the offline replay path.
     online_findings = online._build_longitudinal_summary()
 
     assert [f.to_wire_dict() for f in offline.findings] == \
@@ -206,6 +207,25 @@ def test_window_view_single_envelope_is_longitudinal(tmp_path):
     assert f.scope == "reader_posix:window"   # entity-free temporal scope
     assert f.view_type == "window"
     assert f.trend.persistence == 5           # 5 distinct windows from ONE envelope
+    assert f.trend.prevalence == pytest.approx(1.0)   # 5 windows / 5 total (span, no off-by-one)
+
+
+def test_epoch_view_single_envelope_is_longitudinal(tmp_path):
+    # OFFLINE single pass: ONE envelope holding per-epoch facts. With epoch a
+    # temporal axis, the diagnoser keys on window.epoch, so persistence accumulates
+    # across epochs from one envelope (the offline analog of the window view) and
+    # prevalence is a clean 1.0 (0-based epochs span 0..4 -> 5 windows).
+    env = _envelope([_fact("fetch_pressure", epoch=i) for i in range(5)])
+    findings = Diagnoser().diagnose_facts(_write_jsonl([env], tmp_path / "facts.jsonl")).findings
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.finding_type == "fetch_pressure"
+    assert f.scope == "app:epoch"            # entity-free temporal scope
+    assert f.view_type == "epoch"
+    assert f.motif == "persistent_pressure"
+    assert f.trend.persistence == 5          # 5 distinct epochs from ONE envelope
+    assert f.trend.prevalence == pytest.approx(1.0)
 
 
 def test_detail_fact_keyed_by_view_and_entity(tmp_path):

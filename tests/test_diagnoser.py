@@ -18,11 +18,12 @@ def _record_window(diagnoser: Diagnoser, facts):
         "view_type": "epoch",
         "facts": facts,
     }
+    # current_window is aligned to each fact's window coordinate on ingest, so no
+    # explicit advance is needed (facts here carry epoch = current_window + 1).
     diagnoser._handle_analysis_facts(
         _FakeEvent(json.dumps(envelope).encode("utf-8")),
         metadata={},
     )
-    diagnoser.state.advance_window()
 
 
 def _finding_for(findings, fact_type: str, scope: str):
@@ -223,9 +224,10 @@ def test_build_control_findings_uses_current_window_and_fresh_scope():
     assert first_control[0].scope == "reader_posix:epoch"
     assert first_control[0].trend.prevalence == pytest.approx(1.0)
     assert first_control[0].trend.support_windows == 1
-    assert first_control[0].trend.last_seen_window == 0
-
-    diagnoser.state.advance_window()
+    # current_window is aligned to the fact's window coordinate (epoch=1), so the
+    # control finding is stamped at window 1 (the real window number, not a 0-based
+    # processing counter). The next envelope's coordinate advances it.
+    assert first_control[0].trend.last_seen_window == 1
 
     second_envelope = {
         "view_type": "epoch",

@@ -13,9 +13,14 @@ from .utils.log_utils import console_block
 
 logger = structlog.get_logger()
 
-# Views whose facts are longitudinal: keyed on the analysis window (FactWindow.window).
-# Everything else is spatial/one-shot. See dfanalyzer docs/window-as-longitudinal-axis.md.
-TEMPORAL_VIEW_TYPES = {"window"}
+# Views whose facts are longitudinal. Online streaming uses `window`; offline batch
+# uses the trace's natural temporal dimensions (epoch/step/time_range). Everything
+# else is spatial/one-shot. See dfanalyzer docs/window-as-longitudinal-axis.md.
+TEMPORAL_VIEW_TYPES = {"window", "epoch", "step", "time_range"}
+# The longitudinal coordinate field carried by each temporal view (its axis), so the
+# diagnoser keys persistence/trend on the right number per view_type.
+TEMPORAL_COORD = {"window": "window_index", "epoch": "epoch",
+                  "step": "step", "time_range": "time_bucket"}
 
 _shutdown_requested = False
 
@@ -70,16 +75,14 @@ class Diagnoser:
 
     def _replay_facts(self, facts_path: str):
         """Replay fact envelopes through the same longitudinal pipeline the Mofka
-        stream uses (ingest + advance_window per envelope), then build findings.
-        Shared by diagnose_facts and diagnose_file."""
+        stream uses, then build findings. Shared by diagnose_facts and diagnose_file.
+        current_window is aligned to each fact's window coordinate on ingest
+        (record_fact), so a single envelope spanning many windows/epochs still
+        accumulates persistence and matches the online path (online/offline parity)."""
         with console_block("Replay fact envelopes"):
             window_count = 0
             for envelope in self._read_fact_envelopes(facts_path):
                 self._ingest_fact_envelope(envelope)
-                # Advance the window after each envelope, exactly as the stream
-                # loop does after each analysis_facts event, so persistence and
-                # prevalence match the online path (online/offline parity).
-                self.state.advance_window()
                 window_count += 1
         logger.info("diagnoser.facts.replayed", windows=window_count, path=facts_path)
 
@@ -275,12 +278,10 @@ class Diagnoser:
                         event_index=event_count,
                     )
 
-                # Only advance the analysis window after facts events (epoch
-                # boundaries), not after flat_view events which are just scored
-                # data.  This ensures consecutive epochs produce consecutive
-                # window indices so persistence tracking works correctly.
-                if artifact_type == "analysis_facts":
-                    self.state.advance_window()
+                # No explicit window advance: current_window is aligned to each
+                # fact's window coordinate on ingest (record_fact), so consecutive
+                # analysis windows yield consecutive indices automatically and the
+                # control path's observed_in_window(current_window) sees fresh facts.
                 event.acknowledge()
                 future = consumer.pull()
 
@@ -382,8 +383,12 @@ class Diagnoser:
             # longitudinal coordinate for temporal views), and epoch/step metadata.
             window = fact.get("window", {})
             view_type = window.get("view_type") if isinstance(window, dict) else None
-            fact_window_index = window.get("window_index") if isinstance(window, dict) else None
             epoch = window.get("epoch") if isinstance(window, dict) else None
+            # Select the longitudinal coordinate by the view's axis: window->window_index,
+            # epoch->epoch, step->step, time_range->time_bucket.
+            coord_field = TEMPORAL_COORD.get(view_type)
+            fact_coord = (window.get(coord_field)
+                          if (isinstance(window, dict) and coord_field) else None)
 
             # scope is a nested dict: {"entity": str|null, "layer": str|null, ...}.
             # Two-level scope keyed off the fact's view_type:
@@ -416,8 +421,8 @@ class Diagnoser:
                 # accumulates persistence (online: equals the per-envelope counter).
                 # Spatial facts fall back to the current window (one-shot offline).
                 window_index=(
-                    fact_window_index
-                    if (view_type in TEMPORAL_VIEW_TYPES and fact_window_index is not None)
+                    fact_coord
+                    if (view_type in TEMPORAL_VIEW_TYPES and fact_coord is not None)
                     else self.state.current_window
                 ),
                 epoch=epoch,
