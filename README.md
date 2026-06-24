@@ -51,11 +51,31 @@ The CLI is a Hydra app selecting an `input` (`file` / `mofka` / `zmq`) and an
 
 ### Offline — replay a DFAnalyzer fact bundle
 
+A minimal `time_range` rule (offline rules are workload-specific; the shipped
+`dlio.yaml` rules target the streaming epoch axis). Save as `/tmp/tr.yaml`:
+
+```yaml
+schema_version: analysisfact-rules.v1
+defaults: {rule_version: "1.0.0", emit_mode: aggregate, confidence: "0.80"}
+rules:
+  - id: tr.reader_pressure.v1
+    priority: 100
+    source_view: time_range
+    fact_type: reader_pressure
+    required_metrics: [reader_posix_time_proc_max, app_time_proc_max]
+    derived_metrics:
+      reader_frac: "fillna0(reader_posix_time_proc_max) / max(fillna0(app_time_proc_max), 1e-9)"
+    when: "reader_frac >= 0.10"
+    severity_score: "clip01(reader_frac)"
+    opportunity_tags: [dataloader_prefetch, reader_parallelism]
+```
+
 ```bash
-# 1. DFAnalyzer writes a fact bundle (facts.jsonl) with output=file
+# 1. DFAnalyzer writes a fact bundle (facts.jsonl) with output=file. time_range is
+#    the offline longitudinal axis (epoch/window come from the streaming path below).
 dfanalyzer analyzer/preset=dlio trace_path=tests/data/extracted/dftracer-dlio \
-    view_types=[epoch] facts.enabled=true \
-    output=file output.path=/tmp/bundle
+    view_types=[time_range] facts.enabled=true \
+    facts.eval_rule_file=/tmp/tr.yaml output=file output.path=/tmp/bundle
 
 # 2. DFDiagnoser replays it into findings
 dfdiagnoser input=file input.path=/tmp/bundle output=console
@@ -68,31 +88,40 @@ dfdiagnoser input=file input.path=/tmp/bundle output=console
 │ Severity   critical: 1  │
 ╰─────────────────────────╯
 Findings
-└── view_type: epoch (1)
-    └── app:epoch (1)
-        └── [C] fetch_pressure: persistent_pressure (severity critical 1.00, conf 0.80)
-            ├── prevalence 1.00, persistence 5, trend stable -> input_pipeline_tuning
-            └── (fact) fetch_pressure @ app:epoch
+└── view_type: time_range (1)
+    └── time_range (1)
+        └── [C] reader_pressure: unclassified (severity critical 1.00, conf 0.50)
+            ├── prevalence 0.93, persistence 39, trend stable -> investigate
+            └── (fact) reader_pressure @ time_range
 ```
 
-(Read it as: `fetch_pressure` in the `app` layer was `critical` in **all 5** epochs —
-`persistent_pressure` — so the fix class is `input_pipeline_tuning`. Online over the
-`window` axis it reads identically, with persistence counted across streaming windows.)
+(Read it as: `reader_pressure` was `critical` across **39 consecutive** time windows;
+its `opportunity_tags` carry the fix class the optimizer acts on.)
 
-### Online — live stream (ZMQ)
+### Online — live stream (ZMQ); `window`/`epoch` axis
 
-DFAnalyzer streams fact envelopes with `output=zmq`; DFDiagnoser consumes them live
-and prints the longitudinal summary on idle (or, with `input.output_address` set,
-streams control findings onward to the optimizer):
+Streaming windows the event flow, so each window carries `epoch`/`window` coordinates —
+the per-epoch longitudinal axis. DFAnalyzer streams fact envelopes with `output=zmq`;
+DFDiagnoser consumes them live and prints the summary on idle (or, with
+`input.output_address` set, streams control findings onward to the optimizer):
 
 ```bash
 # DFDiagnoser binds and waits for facts
 dfdiagnoser input=zmq input.address="tcp://*:5556" output=console
 
-# DFAnalyzer side (separate process) pushes facts to it
+# DFAnalyzer side (separate process) pushes window-view facts to it
 dfanalyzer analyzer/preset=dlio input=zmq input.address="tcp://*:5555" \
     view_types=[window] facts.enabled=true \
     output=zmq output.address="tcp://127.0.0.1:5556"
+```
+
+```text
+Findings
+└── view_type: window (1)
+    └── window (1)
+        └── [C] fetch_pressure: persistent_pressure (severity critical 1.00, conf 0.80)
+            ├── prevalence 1.00, persistence 18, trend stable -> input_pipeline_tuning
+            └── (fact) fetch_pressure @ window
 ```
 
 ### Online — live stream (Mofka, LiveFlow)
