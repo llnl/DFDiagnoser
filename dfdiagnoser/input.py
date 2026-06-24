@@ -19,3 +19,14 @@ class MofkaInput:
     idle_timeout_sec: int = 0
     pull_timeout_ms: int = 1000
     output_topic: str = ""
+
+
+@dc.dataclass
+class ZMQInput:
+    """Streaming diagnosis from analyzer output=zmq (PULL consumer). ``address`` is
+    the socket the analyzer's ZMQOutput pushes fact envelopes to."""
+    address: str
+    bind: bool = True
+    idle_timeout_sec: float = 10.0
+    poll_timeout_ms: int = 1000
+    output_address: str = ""

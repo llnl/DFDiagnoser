@@ -27,6 +27,16 @@ class MofkaInputConfig(InputConfig):
 
 
 @dc.dataclass
+class ZMQInputConfig(InputConfig):
+    _target_: str = "dfdiagnoser.input.ZMQInput"
+    address: str = MISSING
+    bind: bool = True
+    idle_timeout_sec: float = 10.0
+    poll_timeout_ms: int = 1000
+    output_address: str = ""
+
+
+@dc.dataclass
 class OutputConfig:
     pass
 
@@ -70,6 +80,7 @@ def init_hydra_config_store() -> ConfigStore:
     cs.store(group="diagnoser", name="default", node=DiagnoserConfig)
     cs.store(group="input", name="file", node=FileInputConfig)
     cs.store(group="input", name="mofka", node=MofkaInputConfig)
+    cs.store(group="input", name="zmq", node=ZMQInputConfig)
     cs.store(group="output", name="console", node=ConsoleOutputConfig)
     cs.store(group="output", name="file", node=FileOutputConfig)
     return cs

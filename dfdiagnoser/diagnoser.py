@@ -330,6 +330,107 @@ class Diagnoser:
             del consumer
             del driver
 
+    def diagnose_zmq(
+        self,
+        address: str,
+        bind: bool = True,
+        metric_boundaries: dict = {},
+        stop_name: str = "end",
+        output_address: str = "",
+        output_bind: bool = True,
+        idle_timeout_sec: float = 10.0,
+        poll_timeout_ms: int = 1000,
+    ) -> DiagnosisResult:
+        """ZMQ streaming consumer mirroring diagnose_mofka. Pulls analyzer fact
+        envelopes (multipart [metadata_json, payload], matching analyzer ZMQOutput)
+        off a PULL socket, ingests them through the shared transport-agnostic core,
+        optionally streams control findings to a PUSH output socket, and returns the
+        longitudinal summary on idle timeout / stop sentinel / shutdown."""
+        import zmq
+        from .streaming.zmq_io import open_consumer, open_producer
+
+        context, consumer = open_consumer(address, bind=bind)
+        poller = zmq.Poller()
+        poller.register(consumer, zmq.POLLIN)
+
+        out_ctx = findings_producer = None
+        if output_address:
+            try:
+                out_ctx, findings_producer = open_producer(output_address, bind=output_bind)
+                logger.info("diagnoser.findings_producer.open", address=output_address)
+            except Exception:
+                logger.warning("diagnoser.findings_producer.failed", exc_info=True)
+
+        facts_count = 0
+        last_event_time = None
+        logger.info("diagnoser.zmq.start", address=address, idle_timeout_sec=idle_timeout_sec)
+        install_shutdown_handler()
+        try:
+            while not _shutdown_requested:
+                socks = dict(poller.poll(timeout=poll_timeout_ms))
+                if consumer not in socks:
+                    if (last_event_time is not None and idle_timeout_sec > 0
+                            and (time.monotonic() - last_event_time) >= idle_timeout_sec):
+                        logger.info("diagnoser.zmq.idle_timeout",
+                                    idle_sec=round(time.monotonic() - last_event_time, 1))
+                        break
+                    continue
+                parts = consumer.recv_multipart()
+                last_event_time = time.monotonic()
+                if not parts:
+                    continue
+                try:
+                    metadata = json.loads(parts[0].decode("utf-8"))
+                except (ValueError, TypeError):
+                    metadata = {}
+                if metadata.get("name") == stop_name:
+                    logger.info("diagnoser.zmq.stop_sentinel", facts_count=facts_count)
+                    break
+                artifact_type = metadata.get("artifact_type", "flat_view")
+                try:
+                    if artifact_type == "analysis_facts" and len(parts) > 1:
+                        envelope = json.loads(parts[1].decode("utf-8"))
+                        touched_keys = self._ingest_fact_envelope(envelope)
+                        facts_count += 1
+                        if findings_producer is not None:
+                            control = self._build_control_findings(
+                                window_index=self.state.current_window,
+                                touched_keys=touched_keys,
+                            )
+                            if control:
+                                self._publish_findings_zmq(findings_producer, control, "control")
+                    # else: non-facts (flat_view) ignored -- the diagnoser is a pure
+                    # fact consumer (scoring/fact-building live in the analyzer).
+                except Exception:
+                    logger.exception("diagnoser.zmq.event_error", artifact_type=artifact_type)
+        finally:
+            findings = self._build_longitudinal_summary()
+            logger.info("diagnoser.zmq.done", facts_count=facts_count, findings=len(findings))
+            if findings_producer is not None:
+                try:
+                    self._publish_findings_zmq(findings_producer, findings, "summary")
+                finally:
+                    findings_producer.close(linger=0)
+                    out_ctx.term()
+            consumer.close(linger=0)
+            context.term()
+        return DiagnosisResult(findings=findings)
+
+    def _publish_findings_zmq(self, producer, findings, publish_mode="summary"):
+        """Send findings over a ZMQ PUSH socket as multipart [metadata, wire_dict],
+        the diagnosis_findings -> optimizer hop (mirrors the Mofka publish)."""
+        for finding in findings:
+            metadata = {
+                "artifact_type": "diagnosis_finding",
+                "publish_mode": publish_mode,
+                "finding_type": finding.finding_type,
+                "scope": finding.scope,
+            }
+            producer.send_multipart([
+                json.dumps(metadata).encode("utf-8"),
+                json.dumps(finding.to_wire_dict()).encode("utf-8"),
+            ])
+
     def _handle_analysis_facts(self, event, metadata):
         """Mofka-path wrapper: decode the event payload into a fact envelope,
         then delegate to the shared, transport-agnostic ingest core so the
