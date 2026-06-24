@@ -1,5 +1,4 @@
 import hydra
-# import signal
 import os
 import structlog
 from hydra.core.hydra_config import HydraConfig
@@ -10,7 +9,7 @@ from pathlib import Path
 from . import InputType, OutputType
 from .config import init_hydra_config_store
 from .diagnoser import Diagnoser
-from .input import FileInput, MofkaInput
+from .input import FileInput, MofkaInput, ZMQInput
 from .utils.log_utils import configure_logging, console_block, log_block
 
 
@@ -46,16 +45,18 @@ def main(cfg: DictConfig):
             topic_name=input.topic_name,
             output_handler=output.handle_result,
         )
-    # elif isinstance(input, ZMQInput):
-    #     diagnosis_stream = diagnoser.diagnose_zmq(input.address)
-    #     diagnosis_stream.start()
-    #     print("Streaming diagnosis started. Press Ctrl+C to exit.")
-    #     try:
-    #         signal.pause()
-    #     except KeyboardInterrupt:
-    #         print("\nShutting down streaming diagnosis...")
-    #     finally:
-    #         diagnosis_stream.stop()
+    elif isinstance(input, ZMQInput):
+        # Streaming over ZMQ: pull analyzer fact envelopes until idle/stop, then
+        # render the longitudinal summary (same DiagnosisResult as the offline path).
+        diagnosis_result = diagnoser.diagnose_zmq(
+            address=input.address,
+            bind=input.bind,
+            output_address=input.output_address,
+            idle_timeout_sec=input.idle_timeout_sec,
+            poll_timeout_ms=input.poll_timeout_ms,
+        )
+        with console_block("Output"):
+            output.handle_result(diagnosis_result)
     else:
         raise ValueError(f"Invalid input type: {type(input)}")
 
