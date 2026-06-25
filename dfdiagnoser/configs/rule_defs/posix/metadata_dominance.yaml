@@ -1,5 +1,5 @@
-excessive_metadata_access:
-  name: "Excessive metadata access"
+metadata_dominance:
+  name: "Metadata dominance"
   condition: "({posix_layer}_metadata_{time_metric} / {posix_layer}_{time_metric}) >= 0.5"
   reasons:
     - condition: "({posix_layer}_open_{time_metric} > {posix_layer}_close_{time_metric}) & ({posix_layer}_open_{time_metric} > {posix_layer}_seek_{time_metric})"

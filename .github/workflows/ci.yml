@@ -51,7 +51,7 @@ jobs:
       - name: Run DFDiagnoser
         run: |
           uv run dfdiagnoser \
-            input=checkpoint \
-            input.checkpoint_dir=${{ github.workspace }}/tests/data/dfanalyzer_checkpoints/unet3d_v100 \
+            input=file \
+            input.path=${{ github.workspace }}/tests/data/facts_bundle \
             output=file \
             output.output_format=json

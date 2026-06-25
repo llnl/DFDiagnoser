@@ -13,6 +13,8 @@ class FactObservation:
     severity_label: str
     evidence: Dict[str, Any] = dc.field(default_factory=dict)
     opportunity_tags: List[str] = dc.field(default_factory=list)
+    suppresses_tags: List[str] = dc.field(default_factory=list)
+    view_type: Optional[str] = None  # the analyzer view_type (epoch/proc_name/file_name/...)
 
 
 class FactTracker:
@@ -69,24 +71,35 @@ class DiagnosisStateStore:
 
     def __init__(self):
         self.current_window: int = 0
+        self._min_window: Optional[int] = None
         self._trackers: Dict[Tuple[str, str], FactTracker] = defaultdict(FactTracker)
         self._scored_summaries: List[Dict[str, Any]] = []
 
     def record_fact(self, key: Tuple[str, str], obs: FactObservation):
         self._trackers[key].record(obs)
+        # `current_window` tracks the LATEST window coordinate ingested (the real
+        # analysis-window number), so the online control path finds just-arrived
+        # facts via observed_in_window(current_window) and effective_total_windows
+        # spans the true window range. See dfanalyzer docs/window-as-longitudinal-axis.md.
+        if obs.window_index is not None:
+            self.current_window = max(self.current_window, obs.window_index)
+            self._min_window = (obs.window_index if self._min_window is None
+                                else min(self._min_window, obs.window_index))
 
     def advance_window(self):
+        # Explicit step (e.g. an empty/spatial window with no temporal facts to align on).
         self.current_window += 1
+        if self._min_window is None:
+            self._min_window = self.current_window
         for tracker in self._trackers.values():
             tracker.update_total_windows(self.current_window)
 
     def effective_total_windows(self) -> int:
-        max_seen_window = -1
-        for tracker in self._trackers.values():
-            last_seen = tracker.last_seen_window()
-            if last_seen is not None:
-                max_seen_window = max(max_seen_window, last_seen)
-        return max(self.current_window, max_seen_window + 1)
+        # Span of windows observed: [_min_window, current_window]. Base-agnostic, so
+        # 1-based `window` (1..N) and 0-based epoch/step both yield the correct count.
+        if self._min_window is None:
+            return max(self.current_window, 1)
+        return self.current_window - self._min_window + 1
 
     def record_scored_summary(self, scored_df: pd.DataFrame):
         """Extract and store summary stats from a scored flat view."""

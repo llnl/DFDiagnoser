@@ -10,9 +10,9 @@ class InputConfig:
 
 
 @dc.dataclass
-class CheckpointInputConfig(InputConfig):
-    _target_: str = "dfdiagnoser.input.CheckpointInput"
-    checkpoint_dir: str = MISSING
+class FileInputConfig(InputConfig):
+    _target_: str = "dfdiagnoser.input.FileInput"
+    path: str = MISSING
 
 
 @dc.dataclass
@@ -24,6 +24,16 @@ class MofkaInputConfig(InputConfig):
     idle_timeout_sec: int = 0
     pull_timeout_ms: int = 1000
     output_topic: str = ""
+
+
+@dc.dataclass
+class ZMQInputConfig(InputConfig):
+    _target_: str = "dfdiagnoser.input.ZMQInput"
+    address: str = MISSING
+    bind: bool = True
+    idle_timeout_sec: float = 10.0
+    poll_timeout_ms: int = 1000
+    output_address: str = ""
 
 
 @dc.dataclass
@@ -61,13 +71,16 @@ class RuleDefinitionConfig:
 @dc.dataclass
 class DiagnoserConfig:
     _target_: str = "dfdiagnoser.diagnoser.Diagnoser"
+    trend_strategy: str = "fixed"
+    trend_lookback: int = 3
 
 
 def init_hydra_config_store() -> ConfigStore:
     cs = ConfigStore.instance()
     cs.store(group="diagnoser", name="default", node=DiagnoserConfig)
-    cs.store(group="input", name="checkpoint", node=CheckpointInputConfig)
+    cs.store(group="input", name="file", node=FileInputConfig)
     cs.store(group="input", name="mofka", node=MofkaInputConfig)
+    cs.store(group="input", name="zmq", node=ZMQInputConfig)
     cs.store(group="output", name="console", node=ConsoleOutputConfig)
     cs.store(group="output", name="file", node=FileOutputConfig)
     return cs

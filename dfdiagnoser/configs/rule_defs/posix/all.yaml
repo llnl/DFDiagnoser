@@ -1,5 +1,5 @@
 defaults:
-  - excessive_metadata_access
+  - metadata_dominance
   - operation_imbalance
   - size_imbalance
   - small_reads

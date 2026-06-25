@@ -1,19 +1,26 @@
 import glob
-import io
 import json
 import os
 import signal
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
 import structlog
 
-from .scoring import score_metrics
+from .trend import TrendStrategy, get_trend_strategy
 from .types import DiagnosisResult
 from .utils.log_utils import console_block
 
 logger = structlog.get_logger()
+
+# Views whose facts are longitudinal. Online streaming uses `window`; offline batch
+# uses the trace's natural temporal dimensions (epoch/step/time_range). Everything
+# else is spatial/one-shot. See dfanalyzer docs/window-as-longitudinal-axis.md.
+TEMPORAL_VIEW_TYPES = {"window", "epoch", "step", "time_range"}
+# The longitudinal coordinate field carried by each temporal view (its axis), so the
+# diagnoser keys persistence/trend on the right number per view_type.
+TEMPORAL_COORD = {"window": "window_index", "epoch": "epoch",
+                  "step": "step", "time_range": "time_bucket"}
 
 _shutdown_requested = False
 
@@ -31,52 +38,93 @@ def install_shutdown_handler():
 
 
 class Diagnoser:
-    def __init__(self):
+    def __init__(self, trend_strategy: str = "fixed", trend_lookback: int = 3,
+                 **trend_kwargs):
         from .state import DiagnosisStateStore
 
         self.state = DiagnosisStateStore()
-
-    def diagnose_checkpoint(self, checkpoint_dir: str, metric_boundaries: dict = {}):
-        if not os.path.exists(checkpoint_dir):
-            raise FileNotFoundError(
-                f"Checkpoint directory {checkpoint_dir} does not exist"
-            )
-        if not os.path.isdir(checkpoint_dir):
-            raise NotADirectoryError(
-                f"Checkpoint directory {checkpoint_dir} is not a directory"
-            )
-        if not os.listdir(checkpoint_dir):
-            raise ValueError(f"Checkpoint directory {checkpoint_dir} is empty")
-
-        with console_block("Load raw stats"):
-            raw_stats_paths = glob.glob(
-                os.path.join(checkpoint_dir, "_raw_stats_*.json")
-            )
-            if not raw_stats_paths:
-                raise ValueError(
-                    f"Checkpoint directory {checkpoint_dir} does not contain any raw stats files"
-                )
-            with open(raw_stats_paths[0], "r") as f:
-                raw_stats = json.load(f)
-        flat_view_paths = glob.glob(
-            os.path.join(checkpoint_dir, "_flat_view_*.parquet")
+        self._trend: TrendStrategy = get_trend_strategy(
+            trend_strategy, lookback=trend_lookback, **trend_kwargs,
         )
-        if not flat_view_paths:
-            raise ValueError(
-                f"Checkpoint directory {checkpoint_dir} does not contain any flat view files"
+
+    def diagnose_file(self, path: str, metric_boundaries: dict = {}):
+        """Offline diagnosis from an analyzer output=file bundle dir: replay its
+        facts.jsonl into findings. Scoring/fact-building lives in the analyzer,
+        so the diagnoser is purely a fact consumer."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Bundle directory {path} does not exist")
+        if not os.path.isdir(path):
+            raise NotADirectoryError(f"Bundle path {path} is not a directory")
+
+        facts_path = os.path.join(path, "facts.jsonl")
+        if not os.path.exists(facts_path):
+            raise ValueError(f"Bundle directory {path} does not contain facts.jsonl")
+        return DiagnosisResult(findings=self._replay_facts(facts_path))
+
+    def diagnose_facts(self, facts_path: str, output_handler=None) -> DiagnosisResult:
+        """Offline replay of saved analyzer fact envelopes -> findings, with no
+        Mofka/streaming dependency. ``facts_path`` may be a ``.jsonl`` file (one
+        ``analyzer.fact-envelope.v1`` object per line) or a directory of
+        per-window envelope ``.json`` files."""
+        if not os.path.exists(facts_path):
+            raise FileNotFoundError(f"Facts path {facts_path} does not exist")
+        result = DiagnosisResult(findings=self._replay_facts(facts_path))
+        if output_handler is not None:
+            output_handler(result)
+        return result
+
+    def _replay_facts(self, facts_path: str):
+        """Replay fact envelopes through the same longitudinal pipeline the Mofka
+        stream uses, then build findings. Shared by diagnose_facts and diagnose_file.
+        current_window is aligned to each fact's window coordinate on ingest
+        (record_fact), so a single envelope spanning many windows/epochs still
+        accumulates persistence and matches the online path (online/offline parity)."""
+        with console_block("Replay fact envelopes"):
+            window_count = 0
+            for envelope in self._read_fact_envelopes(facts_path):
+                self._ingest_fact_envelope(envelope)
+                window_count += 1
+        logger.info("diagnoser.facts.replayed", windows=window_count, path=facts_path)
+
+        findings = self._build_longitudinal_summary()
+        for finding in findings:
+            logger.info(
+                "diagnoser.finding",
+                finding_type=finding.finding_type,
+                scope=finding.scope,
+                view_type=finding.view_type,
+                motif=finding.motif,
+                severity=finding.severity,
+                prevalence=round(finding.trend.prevalence, 4),
+                persistence=finding.trend.persistence,
+                trend_direction=finding.trend.trend_direction,
+                summary=finding.summary,
             )
+        return findings
 
-        with console_block("Score flat views"):
-            scored_flat_views = []
-            for flat_view_path in flat_view_paths:
-                flat_view = pd.read_parquet(flat_view_path)
-                scored_flat_view = score_metrics(flat_view, metric_boundaries)
-                scored_flat_views.append(scored_flat_view)
-
-        return DiagnosisResult(
-            flat_view_paths=flat_view_paths,
-            scored_flat_views=scored_flat_views,
-        )
+    @staticmethod
+    def _read_fact_envelopes(facts_path: str):
+        """Yield fact-envelope dicts from a ``.jsonl`` file (one per line) or a
+        directory of per-window envelope ``.json`` files (sorted by name)."""
+        if os.path.isdir(facts_path):
+            paths = sorted(glob.glob(os.path.join(facts_path, "*.json")))
+            if not paths:
+                raise ValueError(f"No .json envelope files found in {facts_path}")
+            for p in paths:
+                with open(p, "r", encoding="utf-8") as f:
+                    yield json.load(f)
+        else:
+            with open(facts_path, "r", encoding="utf-8") as f:
+                for line_no, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"Invalid JSON on line {line_no} of {facts_path}: {exc}"
+                        ) from exc
 
     def diagnose_mofka(
         self,
@@ -218,9 +266,9 @@ class Diagnoser:
                                     window=self.state.current_window,
                                 )
                     else:
-                        self._handle_flat_view(
-                            event, metadata, metric_boundaries, output_handler
-                        )
+                        # Non-facts artifacts (e.g. flat views) are ignored: the
+                        # diagnoser is a pure fact consumer now (scoring/fact-building
+                        # moved to the analyzer).
                         flat_view_count += 1
                 except Exception:
                     error_count += 1
@@ -230,12 +278,10 @@ class Diagnoser:
                         event_index=event_count,
                     )
 
-                # Only advance the analysis window after facts events (epoch
-                # boundaries), not after flat_view events which are just scored
-                # data.  This ensures consecutive epochs produce consecutive
-                # window indices so persistence tracking works correctly.
-                if artifact_type == "analysis_facts":
-                    self.state.advance_window()
+                # No explicit window advance: current_window is aligned to each
+                # fact's window coordinate on ingest (record_fact), so consecutive
+                # analysis windows yield consecutive indices automatically and the
+                # control path's observed_in_window(current_window) sees fresh facts.
                 event.acknowledge()
                 future = consumer.pull()
 
@@ -284,38 +330,111 @@ class Diagnoser:
             del consumer
             del driver
 
-    def _handle_flat_view(self, event, metadata, metric_boundaries, output_handler):
-        payload = event.data
-        if payload is None:
-            logger.warning("diagnoser.flat_view.no_data")
-            return
-        if isinstance(payload, list):
-            if not payload:
-                logger.warning("diagnoser.flat_view.empty_payload")
-                return
-            payload = b"".join(payload)
+    def diagnose_zmq(
+        self,
+        address: str,
+        bind: bool = True,
+        metric_boundaries: dict = {},
+        stop_name: str = "end",
+        output_address: str = "",
+        output_bind: bool = True,
+        idle_timeout_sec: float = 10.0,
+        poll_timeout_ms: int = 1000,
+    ) -> DiagnosisResult:
+        """ZMQ streaming consumer mirroring diagnose_mofka. Pulls analyzer fact
+        envelopes (multipart [metadata_json, payload], matching analyzer ZMQOutput)
+        off a PULL socket, ingests them through the shared transport-agnostic core,
+        optionally streams control findings to a PUSH output socket, and returns the
+        longitudinal summary on idle timeout / stop sentinel / shutdown."""
+        import zmq
+        from .streaming.zmq_io import open_consumer, open_producer
 
-        flat_view = pd.read_parquet(io.BytesIO(payload))
-        scored_flat_view = score_metrics(flat_view, metric_boundaries)
+        context, consumer = open_consumer(address, bind=bind)
+        poller = zmq.Poller()
+        poller.register(consumer, zmq.POLLIN)
 
-        # Record score summaries into state
-        self.state.record_scored_summary(scored_flat_view)
+        out_ctx = findings_producer = None
+        if output_address:
+            try:
+                out_ctx, findings_producer = open_producer(output_address, bind=output_bind)
+                logger.info("diagnoser.findings_producer.open", address=output_address)
+            except Exception:
+                logger.warning("diagnoser.findings_producer.failed", exc_info=True)
 
-        result = DiagnosisResult(
-            flat_view_paths=[],
-            scored_flat_views=[scored_flat_view],
-        )
-        output_handler(result)
+        facts_count = 0
+        last_event_time = None
+        logger.info("diagnoser.zmq.start", address=address, idle_timeout_sec=idle_timeout_sec)
+        install_shutdown_handler()
+        try:
+            while not _shutdown_requested:
+                socks = dict(poller.poll(timeout=poll_timeout_ms))
+                if consumer not in socks:
+                    if (last_event_time is not None and idle_timeout_sec > 0
+                            and (time.monotonic() - last_event_time) >= idle_timeout_sec):
+                        logger.info("diagnoser.zmq.idle_timeout",
+                                    idle_sec=round(time.monotonic() - last_event_time, 1))
+                        break
+                    continue
+                parts = consumer.recv_multipart()
+                last_event_time = time.monotonic()
+                if not parts:
+                    continue
+                try:
+                    metadata = json.loads(parts[0].decode("utf-8"))
+                except (ValueError, TypeError):
+                    metadata = {}
+                if metadata.get("name") == stop_name:
+                    logger.info("diagnoser.zmq.stop_sentinel", facts_count=facts_count)
+                    break
+                artifact_type = metadata.get("artifact_type", "flat_view")
+                try:
+                    if artifact_type == "analysis_facts" and len(parts) > 1:
+                        envelope = json.loads(parts[1].decode("utf-8"))
+                        touched_keys = self._ingest_fact_envelope(envelope)
+                        facts_count += 1
+                        if findings_producer is not None:
+                            control = self._build_control_findings(
+                                window_index=self.state.current_window,
+                                touched_keys=touched_keys,
+                            )
+                            if control:
+                                self._publish_findings_zmq(findings_producer, control, "control")
+                    # else: non-facts (flat_view) ignored -- the diagnoser is a pure
+                    # fact consumer (scoring/fact-building live in the analyzer).
+                except Exception:
+                    logger.exception("diagnoser.zmq.event_error", artifact_type=artifact_type)
+        finally:
+            findings = self._build_longitudinal_summary()
+            logger.info("diagnoser.zmq.done", facts_count=facts_count, findings=len(findings))
+            if findings_producer is not None:
+                try:
+                    self._publish_findings_zmq(findings_producer, findings, "summary")
+                finally:
+                    findings_producer.close(linger=0)
+                    out_ctx.term()
+            consumer.close(linger=0)
+            context.term()
+        return DiagnosisResult(findings=findings)
 
-        logger.info(
-            "diagnoser.flat_view.scored",
-            rows=len(flat_view),
-            view_type=metadata.get("view_type", "unknown"),
-        )
+    def _publish_findings_zmq(self, producer, findings, publish_mode="summary"):
+        """Send findings over a ZMQ PUSH socket as multipart [metadata, wire_dict],
+        the diagnosis_findings -> optimizer hop (mirrors the Mofka publish)."""
+        for finding in findings:
+            metadata = {
+                "artifact_type": "diagnosis_finding",
+                "publish_mode": publish_mode,
+                "finding_type": finding.finding_type,
+                "scope": finding.scope,
+            }
+            producer.send_multipart([
+                json.dumps(metadata).encode("utf-8"),
+                json.dumps(finding.to_wire_dict()).encode("utf-8"),
+            ])
 
     def _handle_analysis_facts(self, event, metadata):
-        from .state import FactObservation
-
+        """Mofka-path wrapper: decode the event payload into a fact envelope,
+        then delegate to the shared, transport-agnostic ingest core so the
+        streaming and offline paths accumulate state identically."""
         payload = event.data
         if payload is None:
             logger.warning("diagnoser.analysis_facts.no_data")
@@ -327,6 +446,20 @@ class Diagnoser:
             payload = b"".join(payload)
 
         envelope = json.loads(payload.decode("utf-8"))
+        return self._ingest_fact_envelope(envelope)
+
+    def _ingest_fact_envelope(self, envelope: dict):
+        """Accumulate one analyzer fact envelope into longitudinal state.
+
+        Transport-agnostic: shared verbatim by the Mofka stream path
+        (``_handle_analysis_facts``) and the offline replay path
+        (``diagnose_facts``). Because both feed the same envelope dicts produced
+        by ``AnalysisResult.to_fact_envelope()``, online and offline produce
+        byte-identical findings. Returns the set of (fact_type, scope) keys
+        touched in this window.
+        """
+        from .state import FactObservation
+
         facts = envelope.get("facts", [])
 
         logger.info(
@@ -337,6 +470,7 @@ class Diagnoser:
 
         touched_keys = set()
         for fact in facts:
+            logger.debug("diagnoser.fact.detail", **fact)
             # severity is a nested dict: {"score": float, "label": str, ...}
             severity = fact.get("severity", {})
             if isinstance(severity, dict):
@@ -346,35 +480,59 @@ class Diagnoser:
                 severity_score = float(severity) if severity else 0
                 severity_label = "unknown"
 
-            # scope is a nested dict: {"entity": str, "layer": str|null, ...}
-            # For per_row facts, entity is the row index (e.g., "0", "1") which
-            # changes every epoch — use view_type instead so the same fact_type
-            # accumulates into one tracker for longitudinal persistence tracking.
+            # The fact's window carries its view_type, the analysis window (the
+            # longitudinal coordinate for temporal views), and epoch/step metadata.
+            window = fact.get("window", {})
+            view_type = window.get("view_type") if isinstance(window, dict) else None
+            epoch = window.get("epoch") if isinstance(window, dict) else None
+            # Select the longitudinal coordinate by the view's axis: window->window_index,
+            # epoch->epoch, step->step, time_range->time_bucket.
+            coord_field = TEMPORAL_COORD.get(view_type)
+            fact_coord = (window.get(coord_field)
+                          if (isinstance(window, dict) and coord_field) else None)
+
+            # scope is a nested dict: {"entity": str|null, "layer": str|null, ...}.
+            # Two-level scope keyed off the fact's view_type:
+            #   aggregate fact (entity is None / "window") -> "layer:view_type"
+            #       (whole-view rollup, e.g. "reader_posix:file_name", "app:epoch")
+            #   detail fact (entity set)                  -> "layer:view_type:entity"
+            #       (per-entity, e.g. "reader_posix:file_name:/d/x.npz", "app:epoch:5")
             scope = fact.get("scope", "global")
             if isinstance(scope, dict):
+                node = scope.get("node", "")
                 layer = scope.get("layer")
-                entity = str(scope.get("entity", "global"))
-                # Numeric entities are per-row indices; use view_type for tracking
-                if entity.isdigit():
-                    scope_key = envelope.get("view_type", "global")
-                else:
-                    scope_key = entity
+                raw_entity = scope.get("entity")
+                base = view_type or "global"
                 if layer:
-                    scope_key = f"{layer}:{scope_key}"
+                    base = f"{layer}:{base}"
+                entity = "" if raw_entity is None else str(raw_entity)
+                if entity and entity != "window":
+                    scope_key = f"{base}:{entity}"
+                else:
+                    scope_key = base
+                # Per-node scope: prepend node for independent tracking
+                if node:
+                    scope_key = f"node:{node}:{scope_key}"
             else:
                 scope_key = str(scope)
 
-            # window may have epoch info
-            window = fact.get("window", {})
-            epoch = window.get("epoch") if isinstance(window, dict) else None
-
             obs = FactObservation(
-                window_index=self.state.current_window,
+                # Temporal (window) facts are keyed on the analysis window they
+                # carry, so a single offline envelope spanning many windows still
+                # accumulates persistence (online: equals the per-envelope counter).
+                # Spatial facts fall back to the current window (one-shot offline).
+                window_index=(
+                    fact_coord
+                    if (view_type in TEMPORAL_VIEW_TYPES and fact_coord is not None)
+                    else self.state.current_window
+                ),
                 epoch=epoch,
                 severity_score=severity_score,
                 severity_label=severity_label,
                 evidence=fact.get("evidence", {}),
                 opportunity_tags=fact.get("opportunity_tags", []),
+                suppresses_tags=fact.get("suppresses_tags", []),
+                view_type=view_type,
             )
             key = (fact.get("fact_type", "unknown"), scope_key)
             self.state.record_fact(key, obs)
@@ -385,6 +543,7 @@ class Diagnoser:
                 window_index=self.state.current_window,
                 fact_type=fact.get("fact_type"),
                 scope=scope_key,
+                view_type=view_type,
                 severity_score=round(severity_score, 3),
                 severity_label=severity_label,
                 opportunity_tags=fact.get("opportunity_tags", []),
@@ -431,20 +590,9 @@ class Diagnoser:
             if last_seen_window is None:
                 last_seen_window = peak_window
 
-            # Determine trend direction
-            if len(tracker.observations) >= 2:
-                first_half = tracker.observations[: len(tracker.observations) // 2]
-                second_half = tracker.observations[len(tracker.observations) // 2 :]
-                avg_first = sum(o.severity_score for o in first_half) / len(first_half)
-                avg_second = sum(o.severity_score for o in second_half) / len(second_half)
-                if avg_second > avg_first * 1.2:
-                    trend_direction = "worsening"
-                elif avg_second < avg_first * 0.8:
-                    trend_direction = "improving"
-                else:
-                    trend_direction = "stable"
-            else:
-                trend_direction = "insufficient_data"
+            # Determine trend direction via pluggable strategy
+            severity_series = [o.severity_score for o in tracker.observations]
+            trend_direction = self._trend.compute(severity_series)
 
             trend = TrendEvidence(
                 prevalence=prevalence,
@@ -472,11 +620,17 @@ class Diagnoser:
             # Collect all opportunity_tags from observations (deduplicated, ordered)
             all_tags = []
             seen_tags = set()
+            all_suppresses = []
+            seen_suppresses = set()
             for obs in tracker.observations:
                 for tag in obs.opportunity_tags:
                     if tag not in seen_tags and tag != "none":
                         all_tags.append(tag)
                         seen_tags.add(tag)
+                for tag in obs.suppresses_tags:
+                    if tag not in seen_suppresses:
+                        all_suppresses.append(tag)
+                        seen_suppresses.add(tag)
 
             summary = self._build_finding_summary(
                 fact_type=fact_type,
@@ -490,18 +644,43 @@ class Diagnoser:
             )
 
             layer, _ = self._split_scope(scope)
+            # view_type is consistent within a tracker since the scope key
+            # derives from it; take it from the peak obs.
+            view_type = peak_obs.view_type
+            # Forward evidence metrics from the peak observation so the
+            # optimizer can compute target values (e.g., Amdahl's Law).
+            peak_metrics = self._observation_metrics(peak_obs)
+            # Filter to float-convertible, non-null values only.
+            # The fact engine converts NaN/NA to None via _to_scalar,
+            # so we must handle None explicitly.
+            key_metrics = {}
+            for k, v in peak_metrics.items():
+                if v is None:
+                    continue
+                try:
+                    fv = float(v)
+                    # Skip NaN (can appear if _to_scalar didn't catch it)
+                    if fv != fv:  # NaN check
+                        continue
+                    key_metrics[k] = fv
+                except (TypeError, ValueError):
+                    pass
             finding = DiagnosisFinding(
                 finding_type=fact_type,
                 scope=scope,
                 layer=layer,
                 motif=motif,
                 severity=peak_obs.severity_label,
+                severity_score=peak_obs.severity_score,
                 confidence=confidence,
                 trend=trend,
                 contributing_facts=contributing_facts,
                 recommendation_bundle=recommendation,
                 summary=summary,
                 opportunity_tags=all_tags,
+                suppresses_tags=all_suppresses,
+                key_metrics=key_metrics,
+                view_type=view_type,
             )
             findings.append(finding)
 
@@ -568,7 +747,7 @@ class Diagnoser:
             f"trend={trend_direction}",
         ]
 
-        if fact_type == "excessive_metadata_access":
+        if fact_type == "metadata_dominance":
             peak_share = self._metric_by_suffix(metrics, "metadata_time_frac_parent")
             if peak_share is not None:
                 parts.append(f"peak_metadata_share={peak_share:.2f}")
@@ -620,7 +799,7 @@ class Diagnoser:
         if onset_window <= 1 and trend_direction == "improving" and prevalence < 0.4:
             return "warmup_transient", "none", 0.7, contributing_facts
 
-        if fact_type == "excessive_metadata_access":
+        if fact_type == "metadata_dominance":
             if layer == "reader_posix" and prevalence > 0.5 and persistence > 2:
                 return "metadata_bound", "metadata_reduction", 0.8, contributing_facts
             if layer == "checkpoint_posix" and prevalence > 0.3 and persistence > 1:
@@ -684,25 +863,19 @@ class Diagnoser:
     def _publish_findings(self, producer, findings, publish_mode: str):
         """Publish DiagnosisFindings to Mofka for optimizer consumption."""
         for finding in findings:
-            payload_dict = {
-                "finding_type": finding.finding_type,
-                "scope": finding.scope,
-                "layer": finding.layer,
-                "motif": finding.motif,
-                "severity": finding.severity,
-                "confidence": finding.confidence,
-                "prevalence": finding.trend.prevalence,
-                "persistence": finding.trend.persistence,
-                "support_windows": finding.trend.support_windows,
-                "trend_direction": finding.trend.trend_direction,
-                "last_seen_window": finding.trend.last_seen_window,
-                "contributing_facts": finding.contributing_facts,
-                "recommendation_bundle": finding.recommendation_bundle,
-                "opportunity_tags": finding.opportunity_tags,
-                "summary": finding.summary,
-                "window_index": finding.trend.last_seen_window,
-                "publish_mode": publish_mode,
-            }
+            logger.debug(
+                "diagnoser.finding.detail",
+                finding_type=finding.finding_type,
+                opportunity_tags=finding.opportunity_tags,
+                key_metrics=finding.key_metrics,
+                severity=finding.severity,
+                persistence=finding.trend.persistence,
+                trend_direction=finding.trend.trend_direction,
+                publish_mode=publish_mode,
+            )
+            # Shared serializer (parity with offline findings.json output).
+            payload_dict = finding.to_wire_dict()
+            payload_dict["publish_mode"] = publish_mode
             payload = json.dumps(payload_dict).encode("utf-8")
             metadata = {
                 "type": "diagnosis_finding",
